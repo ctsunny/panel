@@ -284,17 +284,9 @@ delete_self() {
 get_config_params() {
   echo "🔧 请输入配置参数："
 
+  read -p "面板端口（默认 6365）: " PANEL_PORT
+  PANEL_PORT=${PANEL_PORT:-6365}
 
-
-  read -p "前端端口（默认 6366）: " FRONTEND_PORT
-  FRONTEND_PORT=${FRONTEND_PORT:-6366}
-
-  read -p "后端端口（默认 6365）: " BACKEND_PORT
-  BACKEND_PORT=${BACKEND_PORT:-6365}
-
-  DB_NAME=$(generate_random)
-  DB_USER=$(generate_random)
-  DB_PASSWORD=$(generate_random)
   JWT_SECRET=$(generate_random)
 }
 
@@ -309,13 +301,6 @@ install_panel() {
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
   curl -L -o docker-compose.yml "$DOCKER_COMPOSE_URL"
 
-  # 检查 gost.sql 是否已存在
-  if [[ -f "gost.sql" ]]; then
-    echo "⏭️ 跳过下载: gost.sql (使用当前位置的文件)"
-  else
-    echo "📡 下载数据库初始化文件..."
-    curl -L -o gost.sql "$GOST_SQL_URL"
-  fi
   echo "✅ 文件准备完成"
 
   # 自动检测并配置 IPv6 支持
@@ -325,19 +310,16 @@ install_panel() {
   fi
 
   cat > .env <<EOF
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASSWORD=$DB_PASSWORD
 JWT_SECRET=$JWT_SECRET
-FRONTEND_PORT=$FRONTEND_PORT
-BACKEND_PORT=$BACKEND_PORT
+PANEL_PORT=$PANEL_PORT
+VERSION=latest
 EOF
 
   echo "🚀 启动 docker 服务..."
   $DOCKER_CMD up -d
 
   echo "🎉 部署完成"
-  echo "🌐 访问地址: http://服务器IP:$FRONTEND_PORT"
+  echo "🌐 访问地址: http://服务器IP:$PANEL_PORT"
   echo "📖 部署完成后请阅读下使用文档，求求了啊，不要上去就是一顿操作"
   echo "📚 文档地址: https://tes.cc/guide.html"
   echo "💡 默认管理员账号: admin_user / admin_user"

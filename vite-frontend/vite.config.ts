@@ -19,9 +19,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
-    minify: false,  
+    minify: 'esbuild',
     rollupOptions: {
-      treeshake: false,
-    }
+      treeshake: true,
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 1500,
   }
 });
