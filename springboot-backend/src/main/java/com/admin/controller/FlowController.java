@@ -303,9 +303,17 @@ public class FlowController extends BaseController {
         for (Forward forward : forwardList) {
             Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
             if (tunnel != null){
-                GostUtil.PauseService(tunnel.getInNodeId(), name);
+                // Build the correct service name for this specific forward
+                UserTunnel userTunnel = userTunnelService.getOne(
+                    new QueryWrapper<UserTunnel>()
+                        .eq("user_id", forward.getUserId())
+                        .eq("tunnel_id", forward.getTunnelId())
+                );
+                int userTunnelId = userTunnel != null ? userTunnel.getId() : 0;
+                String serviceName = forward.getId() + "_" + forward.getUserId() + "_" + userTunnelId;
+                GostUtil.PauseService(tunnel.getInNodeId(), serviceName);
                 if (tunnel.getType() == 2){
-                    GostUtil.PauseRemoteService(tunnel.getOutNodeId(), name);
+                    GostUtil.PauseRemoteService(tunnel.getOutNodeId(), serviceName);
                 }
             }
             forward.setStatus(0);
