@@ -2,7 +2,7 @@ name: Build and Push Images Based on Version
 
 # 在这里定义统一版本号
 env:
-  VERSION: "1.4.4"
+  VERSION: "1.5.0"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 on:
@@ -36,21 +36,17 @@ jobs:
             echo "Tag ${{ env.VERSION }} already exists"
             echo "tag_exists=true" >> $GITHUB_OUTPUT
             echo "should_build=false" >> $GITHUB_OUTPUT
-            
+
             # 检查从tag到现在，go-gost目录下的文件是否有变化
             TAG_COMMIT=$(git rev-list -n 1 "${{ env.VERSION }}")
             echo "Tag commit: $TAG_COMMIT"
             echo "Current HEAD: $(git rev-parse HEAD)"
-            
-            # 检查 go-gost 目录下是否有实际的文件内容变化
-            # 使用 --ignore-all-space 和 --ignore-blank-lines 来忽略空白差异
-            # 使用 --exit-code: 0表示无差异，1表示有差异
+
             if git diff --quiet --ignore-all-space --ignore-blank-lines $TAG_COMMIT HEAD -- go-gost/ 2>/dev/null; then
-              echo "✅ GOST files unchanged since tag (no content changes)"
+              echo "✅ GOST files unchanged since tag"
               echo "should_build_gost=false" >> $GITHUB_OUTPUT
             else
-              # 显示差异以便调试
-              echo "🔄 Detected changes in go-gost directory:"
+              echo "🔄 Detected changes in go-gost directory"
               git diff --stat $TAG_COMMIT HEAD -- go-gost/ || true
               echo "should_build_gost=true" >> $GITHUB_OUTPUT
             fi
@@ -114,8 +110,8 @@ jobs:
           name: gost-binary-arm64
           path: ./go-gost/gost-arm64
 
-  build-vite:
-    name: Build & Push Vite Frontend
+  build-panel:
+    name: Build & Push Panel (Go backend + Frontend)
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
@@ -124,11 +120,6 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 20
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -140,67 +131,34 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Vite Docker images
+      - name: Build and push Panel Docker image
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
-            -t ghcr.io/ctsunny/panel-frontend:latest \
-            -t ghcr.io/ctsunny/panel-frontend:${VERSION} \
-            ./vite-frontend
+            -t ghcr.io/ctsunny/panel:latest \
+            -t ghcr.io/ctsunny/panel:${VERSION} \
+            -f Dockerfile \
+            .
 
-  build-java:
-    name: Build & Push Spring Boot Backend
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up JDK and Maven
-        uses: actions/setup-java@v5
-        with:
-          java-version: 21
-          distribution: 'temurin'
-
-      - name: Cache Maven dependencies
-        uses: actions/cache@v5
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2
-
-      - name: Build Java JAR
-        working-directory: ./springboot-backend
-        run: mvn clean package -DskipTests
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push Java Docker images
+      - name: Build frontend dist tarball
         run: |
-          VERSION="${{ needs.check-version.outputs.version }}"
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            -t ghcr.io/ctsunny/panel-backend:latest \
-            -t ghcr.io/ctsunny/panel-backend:${VERSION} \
-            ./springboot-backend
+          cd vite-frontend
+          npm install
+          npm run build
+          cd dist
+          tar -czf ../../frontend-dist.tar.gz .
+
+      - name: Upload frontend dist artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: ./frontend-dist.tar.gz
 
   create-release:
     name: Create Release and Tag
-    needs: [check-version, build-gost, build-vite, build-java]
+    needs: [check-version, build-gost, build-panel]
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -220,6 +178,12 @@ jobs:
           name: gost-binary-arm64
           path: ./artifacts/arm64
 
+      - name: Download frontend dist
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: ./artifacts
+
       - name: Rename binaries
         run: |
           mv ./artifacts/amd64/gost-amd64 ./artifacts/gost-amd64
@@ -230,16 +194,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          
+
           # 创建并推送 tag
           git tag "${VERSION}" ${{ github.sha }}
           git push origin "${VERSION}"
-          
+
           # 获取 commit 信息
           COMMIT_MSG=$(git log -1 --pretty=format:"%s")
           COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an")
           COMMIT_DATE=$(git log -1 --pretty=format:"%ai")
-          
+
           # 创建 release
           gh release create "${VERSION}" \
             --title "Release ${VERSION}" \
@@ -247,25 +211,32 @@ jobs:
           - **Message**: ${COMMIT_MSG}
           - **Author**: ${COMMIT_AUTHOR}
           - **Date**: ${COMMIT_DATE}
-          - **Commit**: [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})" \
+          - **Commit**: [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+
+          ## 🚀 What's New in v1.5.0
+          - **Go backend**: Rewrote Spring Boot backend in Go — ~15 MB binary, instant startup, minimal memory
+          - **SQLite**: Replaced MySQL with embedded SQLite — zero-dependency, single-file database in \`/data/gost.db\`
+          - **Single container**: Removed separate MySQL + nginx containers; one image serves API + frontend
+          - **Frontend**: Built Vite frontend with minification; served directly by Go binary
+          - **Same API**: All existing API endpoints preserved; existing GOST nodes work without changes" \
             --repo ${{ github.repository }}
-          
+
           # 上传所有文件到 release
           echo "📤 上传 GOST 二进制文件..."
           gh release upload "${VERSION}" ./artifacts/gost-amd64 --clobber
           gh release upload "${VERSION}" ./artifacts/gost-arm64 --clobber
-          
+
+          echo "📤 上传前端静态资源..."
+          gh release upload "${VERSION}" ./artifacts/frontend-dist.tar.gz --clobber
+
           echo "📤 上传安装脚本..."
           gh release upload "${VERSION}" ./install.sh --clobber
           gh release upload "${VERSION}" ./panel_install.sh --clobber
-          
+
           echo "📤 上传 Docker Compose 配置文件..."
           gh release upload "${VERSION}" ./docker-compose-v4.yml --clobber
           gh release upload "${VERSION}" ./docker-compose-v6.yml --clobber
-          
-          echo "📤 上传数据库初始化文件..."
-          gh release upload "${VERSION}" ./gost.sql --clobber
-          
+
           echo "✅ 所有文件已上传到 Release ${VERSION}"
 
   update-release-gost:
@@ -300,12 +271,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          
+
           echo "🔄 更新 Release ${VERSION} 中的 GOST 二进制文件..."
-          
+
           gh release upload "${VERSION}" ./artifacts/gost-amd64 --clobber
           gh release upload "${VERSION}" ./artifacts/gost-arm64 --clobber
-          
+
           echo "✅ GOST 二进制文件更新完成！"
           echo "ℹ️ Docker 镜像未重新构建"
 
@@ -324,22 +295,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          
+
           echo "📤 更新 Release ${VERSION} 中的脚本和配置文件..."
-          
-          # 上传安装脚本（覆盖）
-          echo "📤 更新安装脚本..."
+
           gh release upload "${VERSION}" ./install.sh --clobber
           gh release upload "${VERSION}" ./panel_install.sh --clobber
-          
-          # 上传 Docker Compose 配置文件（覆盖）
-          echo "📤 更新 Docker Compose 配置文件..."
           gh release upload "${VERSION}" ./docker-compose-v4.yml --clobber
           gh release upload "${VERSION}" ./docker-compose-v6.yml --clobber
-          
-          # 上传数据库初始化文件（覆盖）
-          echo "📤 更新数据库初始化文件..."
-          gh release upload "${VERSION}" ./gost.sql --clobber
-          
-          echo "✅ 文件更新完成！Release ${VERSION} 中的脚本和配置已更新"
+
+          echo "✅ 文件更新完成！"
           echo "ℹ️ Docker 镜像和 GOST 二进制未重新构建"
