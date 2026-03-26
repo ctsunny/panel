@@ -2,7 +2,7 @@ name: Build and Push Images Based on Version
 
 # 在这里定义统一版本号
 env:
-  VERSION: "1.4.3"
+  VERSION: "1.4.4"
 
 on:
   push:
@@ -150,8 +150,8 @@ jobs:
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
-            -t bqlpfy/vite-frontend:latest \
-            -t bqlpfy/vite-frontend:${VERSION} \
+            -t ctsunny/panel-frontend:latest \
+            -t ctsunny/panel-frontend:${VERSION} \
             ./vite-frontend
 
   build-java:
@@ -194,8 +194,8 @@ jobs:
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
-            -t bqlpfy/springboot-backend:latest \
-            -t bqlpfy/springboot-backend:${VERSION} \
+            -t ctsunny/panel-backend:latest \
+            -t ctsunny/panel-backend:${VERSION} \
             ./springboot-backend
 
   create-release:
