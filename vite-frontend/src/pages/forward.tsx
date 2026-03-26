@@ -196,6 +196,8 @@ export default function ForwardPage() {
     name?: string;
     error?: string;
   }>>([]);
+  // Cached parsed protocol URL map (remoteAddr → originalUrl), populated after parsing
+  const [parsedProtocolMap, setParsedProtocolMap] = useState<Record<string, string>>({});
 
   // 导出格式
   const [exportFormat, setExportFormat] = useState<'standard' | 'protocol'>('standard');
@@ -913,6 +915,7 @@ export default function ForwardPage() {
     setImportMode('standard');
     setProtocolImportData('');
     setProtocolParseResults([]);
+    setParsedProtocolMap({});
     setImportModalOpen(true);
   };
 
@@ -948,9 +951,15 @@ export default function ForwardPage() {
     }));
     setProtocolParseResults(parseResults);
 
+    // Cache the mapping of remoteAddr → originalUrl for use in executeImport
+    const newMap: Record<string, string> = {};
     const successLines = results
       .filter(r => r.parsed)
-      .map(r => `${r.parsed!.host}:${r.parsed!.port}|${r.parsed!.name || r.parsed!.host}`);
+      .map(r => {
+        newMap[`${r.parsed!.host}:${r.parsed!.port}`] = r.parsed!.originalUrl;
+        return `${r.parsed!.host}:${r.parsed!.port}|${r.parsed!.name || r.parsed!.host}`;
+      });
+    setParsedProtocolMap(newMap);
 
     if (successLines.length === 0) {
       toast.error('未识别到有效的协议链接');
@@ -978,13 +987,8 @@ export default function ForwardPage() {
 
     // 构建协议URL映射 (remoteAddr → originalUrl)，用于后续协议格式导出
     const protocolMap = getProtocolMap();
-    if (protocolParseResults.length > 0) {
-      const batchResults = batchParseProxyURLs(protocolImportData);
-      for (const r of batchResults) {
-        if (r.parsed) {
-          protocolMap[`${r.parsed.host}:${r.parsed.port}`] = r.parsed.originalUrl;
-        }
-      }
+    if (Object.keys(parsedProtocolMap).length > 0) {
+      Object.assign(protocolMap, parsedProtocolMap);
       saveProtocolMap(protocolMap);
     }
 
@@ -2065,6 +2069,7 @@ export default function ForwardPage() {
                       onChange={(e) => {
                         setProtocolImportData(e.target.value);
                         setProtocolParseResults([]);
+                        setParsedProtocolMap({});
                       }}
                       variant="flat"
                       minRows={5}
@@ -2097,7 +2102,7 @@ export default function ForwardPage() {
                           {protocolParseResults.map((r, i) => (
                             <div key={i} className={`px-2 py-1 rounded text-xs flex items-center gap-2 ${r.error ? 'bg-danger-50 dark:bg-danger-100/10 text-danger-600' : 'bg-success-50 dark:bg-success-100/10 text-success-700 dark:text-success-300'}`}>
                               {r.error ? (
-                                <span>✗ {r.line.slice(0, 40)}… — {r.error}</span>
+                                <span>✗ {r.line.length > 40 ? r.line.slice(0, 40) + '…' : r.line} — {r.error}</span>
                               ) : (
                                 <span>✓ <strong>{r.protocol ? (PROTOCOL_LABELS[r.protocol] ?? r.protocol) : ''}</strong> {r.host}:{r.port} {r.name ? `— ${r.name}` : ''}</span>
                               )}

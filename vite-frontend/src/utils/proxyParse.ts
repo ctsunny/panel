@@ -36,8 +36,8 @@ function tryParseURL(raw: string): URL | null {
 function replaceHostPort(original: string, newHost: string, newPort: number): string {
   try {
     const u = new URL(original);
-    // IPv6 bare addresses need square brackets in the host setter
-    u.hostname = newHost.includes(':') ? `[${newHost}]` : newHost;
+    // IPv6 addresses (multiple colons) need square brackets in the hostname setter
+    u.hostname = newHost.includes(':') && !newHost.startsWith('[') ? `[${newHost}]` : newHost;
     u.port = String(newPort);
     return u.toString();
   } catch {
@@ -45,7 +45,12 @@ function replaceHostPort(original: string, newHost: string, newPort: number): st
   }
 }
 
-// ---------- VMess ----------
+/** Decode URL-safe base64, handling missing padding */
+function decodeBase64(b64: string): string {
+  const padded = b64.replace(/-/g, '+').replace(/_/g, '/');
+  const withPadding = padded + '='.repeat((4 - (padded.length % 4)) % 4);
+  return atob(withPadding);
+}
 // vmess://BASE64  where base64 decodes to a JSON config object
 
 interface VmessConfig {
@@ -68,7 +73,7 @@ function parseVmess(url: string): ParsedProxy | null {
   const b64 = url.slice('vmess://'.length);
   let json: VmessConfig;
   try {
-    const decoded = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+    const decoded = decodeBase64(b64);
     json = JSON.parse(decoded);
   } catch {
     return null;
@@ -76,7 +81,7 @@ function parseVmess(url: string): ParsedProxy | null {
 
   const host = json.add ?? '';
   const port = Number(json.port ?? 0);
-  const name = (json.ps as string) ?? '';
+  const name = json.ps ?? '';
   if (!host || !port) return null;
 
   return {
@@ -162,7 +167,7 @@ function parseSS(url: string): ParsedProxy | null {
   try {
     const [main, fragment] = url.slice('ss://'.length).split('#');
     const name = fragment ? decodeFragment(fragment) : '';
-    const decoded = atob(main.replace(/-/g, '+').replace(/_/g, '/'));
+    const decoded = decodeBase64(main);
     // decoded: method:password@host:port
     const atIdx = decoded.lastIndexOf('@');
     if (atIdx === -1) return null;
@@ -263,11 +268,14 @@ function parseTUIC(url: string): ParsedProxy | null {
 
 // ---------- SOCKS5 / HTTP ----------
 
+const DEFAULT_SOCKS5_PORT = 1080;
+const DEFAULT_HTTP_PORT = 80;
+
 function parseSocks5(url: string): ParsedProxy | null {
   const u = tryParseURL(url);
   if (!u) return null;
   const host = u.hostname;
-  const port = parseInt(u.port || '1080');
+  const port = parseInt(u.port || String(DEFAULT_SOCKS5_PORT));
   const name = decodeFragment(u.hash.slice(1));
   if (!host || !port) return null;
 
@@ -285,7 +293,7 @@ function parseHTTP(url: string): ParsedProxy | null {
   const u = tryParseURL(url);
   if (!u) return null;
   const host = u.hostname;
-  const port = parseInt(u.port || '80');
+  const port = parseInt(u.port || String(DEFAULT_HTTP_PORT));
   const name = decodeFragment(u.hash.slice(1));
   if (!host || !port) return null;
 
