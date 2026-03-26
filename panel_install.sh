@@ -31,6 +31,82 @@ get_docker_compose_url() {
   fi
 }
 
+# 自动安装 Docker（根据国内外环境选择安装源）
+install_docker() {
+  echo "🐳 未检测到 Docker，正在自动安装..."
+
+  # 检查是否需要 sudo
+  if [[ $EUID -ne 0 ]]; then
+    SUDO_CMD="sudo"
+  else
+    SUDO_CMD=""
+  fi
+
+  OS_TYPE=$(uname -s)
+  if [[ "$OS_TYPE" == "Darwin" ]]; then
+    echo "❌ macOS 环境请手动安装 Docker Desktop：https://www.docker.com/products/docker-desktop"
+    exit 1
+  fi
+
+  # 检测 Linux 发行版
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO=$ID
+  elif [ -f /etc/redhat-release ]; then
+    DISTRO="centos"
+  elif [ -f /etc/debian_version ]; then
+    DISTRO="debian"
+  else
+    echo "❌ 无法识别操作系统，请手动安装 Docker。"
+    exit 1
+  fi
+
+  if [ "$COUNTRY" = "CN" ]; then
+    echo "🌏 检测到国内环境，使用阿里云镜像安装 Docker..."
+    case $DISTRO in
+      ubuntu|debian)
+        $SUDO_CMD apt-get update -qq
+        $SUDO_CMD apt-get install -y -qq ca-certificates curl gnupg lsb-release
+        $SUDO_CMD install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL "https://mirrors.aliyun.com/docker-ce/linux/${DISTRO}/gpg" | $SUDO_CMD gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        $SUDO_CMD chmod a+r /etc/apt/keyrings/docker.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/${DISTRO} $(lsb_release -cs) stable" | $SUDO_CMD tee /etc/apt/sources.list.d/docker.list > /dev/null
+        $SUDO_CMD apt-get update -qq
+        $SUDO_CMD apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        ;;
+      centos|rhel|fedora|rocky|almalinux)
+        $SUDO_CMD yum install -y -q yum-utils
+        $SUDO_CMD yum-config-manager --add-repo https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+        $SUDO_CMD sed -i 's+download.docker.com+mirrors.aliyun.com/docker-ce+' /etc/yum.repos.d/docker-ce.repo
+        $SUDO_CMD yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        ;;
+      *)
+        echo "⚠️ 不支持的发行版 ($DISTRO)，尝试使用通用安装脚本（国内加速）..."
+        curl -fsSL https://get.docker.com | $SUDO_CMD sh
+        ;;
+    esac
+  else
+    echo "🌐 检测到国际环境，使用官方脚本安装 Docker..."
+    curl -fsSL https://get.docker.com | $SUDO_CMD sh
+  fi
+
+  # 启动 Docker 服务
+  if command -v systemctl &> /dev/null; then
+    $SUDO_CMD systemctl enable docker
+    $SUDO_CMD systemctl start docker
+  elif command -v service &> /dev/null; then
+    $SUDO_CMD service docker start
+  fi
+
+  # 验证安装结果
+  if command -v docker &> /dev/null; then
+    echo "✅ Docker 安装成功：$(docker --version)"
+  else
+    echo "❌ Docker 安装失败，请手动安装后重试。"
+    exit 1
+  fi
+}
+
 # 检查 docker-compose 或 docker compose 命令
 check_docker() {
   if command -v docker-compose &> /dev/null; then
@@ -39,14 +115,45 @@ check_docker() {
     if docker compose version &> /dev/null; then
       DOCKER_CMD="docker compose"
     else
-      echo "错误：检测到 docker，但不支持 'docker compose' 命令。请安装 docker-compose 或更新 docker 版本。"
-      exit 1
+      echo "⚠️ 检测到 docker，但不支持 'docker compose' 插件，尝试安装 docker-compose-plugin..."
+      if [[ $EUID -ne 0 ]]; then
+        SUDO_CMD="sudo"
+      else
+        SUDO_CMD=""
+      fi
+      if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        DISTRO=$ID
+      fi
+      case $DISTRO in
+        ubuntu|debian)
+          $SUDO_CMD apt-get install -y docker-compose-plugin &> /dev/null || true
+          ;;
+        centos|rhel|fedora|rocky|almalinux)
+          $SUDO_CMD yum install -y docker-compose-plugin &> /dev/null || true
+          ;;
+      esac
+      if docker compose version &> /dev/null; then
+        DOCKER_CMD="docker compose"
+        echo "✅ docker compose 插件安装成功"
+      else
+        echo "❌ 无法启用 docker compose，请更新 Docker 版本。"
+        exit 1
+      fi
     fi
   else
-    echo "错误：未检测到 docker 或 docker-compose 命令。请先安装 Docker。"
-    exit 1
+    install_docker
+    # 安装后重新检测命令
+    if docker compose version &> /dev/null; then
+      DOCKER_CMD="docker compose"
+    elif command -v docker-compose &> /dev/null; then
+      DOCKER_CMD="docker-compose"
+    else
+      echo "❌ Docker 已安装但无法找到 compose 命令，请重新登录后重试。"
+      exit 1
+    fi
   fi
-  echo "检测到 Docker 命令：$DOCKER_CMD"
+  echo "✅ 检测到 Docker 命令：$DOCKER_CMD"
 }
 
 # 检测系统是否支持 IPv6
