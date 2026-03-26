@@ -71,13 +71,6 @@ jobs:
           go-version: '1.23'
           cache-dependency-path: go-gost/go.sum
 
-      - name: Install UPX
-        run: |
-          wget https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-amd64_linux.tar.xz
-          tar -xf upx-4.2.1-amd64_linux.tar.xz
-          sudo mv upx-4.2.1-amd64_linux/upx /usr/local/bin/
-          rm -rf upx-4.2.1-amd64_linux*
-
       - name: Build GOST binary (AMD64)
         working-directory: ./go-gost
         run: |
@@ -87,16 +80,6 @@ jobs:
         working-directory: ./go-gost
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o gost-arm64
-
-      - name: Compress with UPX (AMD64)
-        working-directory: ./go-gost
-        run: |
-          upx --best --lzma gost-amd64
-
-      - name: Compress with UPX (ARM64)
-        working-directory: ./go-gost
-        run: |
-          upx --best --lzma gost-arm64
 
       - name: Upload GOST AMD64 artifact
         uses: actions/upload-artifact@v7
@@ -162,9 +145,47 @@ jobs:
           name: frontend-dist
           path: ./frontend-dist.tar.gz
 
+  build-panel-binary:
+    name: Build Panel Binary (Bare-metal)
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+          cache-dependency-path: go-backend/go.sum
+
+      - name: Build Panel binary (AMD64)
+        working-directory: ./go-backend
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o panel-amd64 .
+
+      - name: Build Panel binary (ARM64)
+        working-directory: ./go-backend
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o panel-arm64 .
+
+      - name: Upload Panel AMD64 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: panel-binary-amd64
+          path: ./go-backend/panel-amd64
+
+      - name: Upload Panel ARM64 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: panel-binary-arm64
+          path: ./go-backend/panel-arm64
+
   create-release:
     name: Create Release and Tag
-    needs: [check-version, build-gost, build-panel]
+    needs: [check-version, build-gost, build-panel, build-panel-binary]
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -184,6 +205,18 @@ jobs:
           name: gost-binary-arm64
           path: ./artifacts/arm64
 
+      - name: Download Panel AMD64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: panel-binary-amd64
+          path: ./artifacts/panel-bins/amd64
+
+      - name: Download Panel ARM64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: panel-binary-arm64
+          path: ./artifacts/panel-bins/arm64
+
       - name: Download frontend dist
         uses: actions/download-artifact@v8
         with:
@@ -194,6 +227,8 @@ jobs:
         run: |
           mv ./artifacts/amd64/gost-amd64 ./artifacts/gost-amd64
           mv ./artifacts/arm64/gost-arm64 ./artifacts/gost-arm64
+          mv ./artifacts/panel-bins/amd64/panel-amd64 ./artifacts/panel-amd64
+          mv ./artifacts/panel-bins/arm64/panel-arm64 ./artifacts/panel-arm64
 
       - name: Create Release
         env:
@@ -232,16 +267,24 @@ jobs:
           gh release upload "${VERSION}" ./artifacts/gost-amd64 --clobber
           gh release upload "${VERSION}" ./artifacts/gost-arm64 --clobber
 
+          echo "📤 上传 Panel 裸机二进制文件..."
+          gh release upload "${VERSION}" ./artifacts/panel-amd64 --clobber
+          gh release upload "${VERSION}" ./artifacts/panel-arm64 --clobber
+
           echo "📤 上传前端静态资源..."
           gh release upload "${VERSION}" ./artifacts/frontend-dist.tar.gz --clobber
 
           echo "📤 上传安装脚本..."
           gh release upload "${VERSION}" ./install.sh --clobber
           gh release upload "${VERSION}" ./panel_install.sh --clobber
+          gh release upload "${VERSION}" ./bare_install.sh --clobber
 
           echo "📤 上传 Docker Compose 配置文件..."
           gh release upload "${VERSION}" ./docker-compose-v4.yml --clobber
           gh release upload "${VERSION}" ./docker-compose-v6.yml --clobber
+
+          echo "📤 上传 systemd service 文件..."
+          gh release upload "${VERSION}" ./panel.service --clobber
 
           echo "✅ 所有文件已上传到 Release ${VERSION}"
 
@@ -306,6 +349,8 @@ jobs:
 
           gh release upload "${VERSION}" ./install.sh --clobber
           gh release upload "${VERSION}" ./panel_install.sh --clobber
+          gh release upload "${VERSION}" ./bare_install.sh --clobber
+          gh release upload "${VERSION}" ./panel.service --clobber
           gh release upload "${VERSION}" ./docker-compose-v4.yml --clobber
           gh release upload "${VERSION}" ./docker-compose-v6.yml --clobber
 
