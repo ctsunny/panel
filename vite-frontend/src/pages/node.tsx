@@ -110,9 +110,9 @@ export default function NodePage() {
       if (res.code === 0) {
         setNodeList(res.data.map((node: any) => ({
           ...node,
-          serverIp: node.server_ip ?? node.serverIp,
-          portSta: node.port_sta ?? node.portSta,
-          portEnd: node.port_end ?? node.portEnd,
+          serverIp: node.server_ip,
+          portSta: node.port_sta,
+          portEnd: node.port_end,
           connectionStatus: node.status === 1 ? 'online' : 'offline',
           systemInfo: null,
           copyLoading: false
