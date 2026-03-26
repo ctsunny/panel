@@ -1,6 +1,6 @@
 # panel — 转发管理面板
 
-基于 [go-gost/gost](https://github.com/go-gost/gost) 与 [go-gost/x](https://github.com/go-gost/x) 构建的流量转发管理面板，fork 自 [bqlpfy/flux-panel](https://github.com/bqlpfy/flux-panel) 并加入了若干新功能。
+基于 [go-gost/gost](https://github.com/go-gost/gost) 与 [go-gost/x](https://github.com/go-gost/x) 构建的流量转发管理面板。
 
 ## 新增功能
 
@@ -52,6 +52,13 @@ curl -L https://raw.githubusercontent.com/ctsunny/panel/refs/heads/main/install.
 | 后端 | Spring Boot 2.7 + MyBatis Plus + MySQL 5.7 |
 | 节点引擎 | Go 1.23 + go-gost/gost + go-gost/x |
 | 部署 | Docker Compose + Nginx |
+
+## Docker 镜像
+
+| 组件 | 镜像 |
+|------|------|
+| 前端 | `ctsunny/panel-frontend` |
+| 后端 | `ctsunny/panel-backend` |
 
 ## 免责声明
 
