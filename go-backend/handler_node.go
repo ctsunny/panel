@@ -25,6 +25,7 @@ func HandleNodeCreate(c *gin.Context) {
 	node := &Node{
 		Name:        dto.Name,
 		Secret:      generateSecret(),
+		IP:          &dto.IP,
 		ServerIP:    dto.ServerIP,
 		PortSta:     dto.PortSta,
 		PortEnd:     dto.PortEnd,
@@ -89,6 +90,9 @@ func HandleNodeUpdate(c *gin.Context) {
 	if dto.Name != "" {
 		updates["name"] = dto.Name
 	}
+	if dto.IP != "" {
+		updates["ip"] = dto.IP
+	}
 	if dto.ServerIP != "" {
 		updates["server_ip"] = dto.ServerIP
 	}
@@ -110,13 +114,11 @@ func HandleNodeUpdate(c *gin.Context) {
 	DB.Model(&node).Updates(updates)
 
 	// Update tunnel IPs that reference this node
-	if dto.ServerIP != "" || dto.Name != "" {
-		node2 := Node{}
-		DB.First(&node2, dto.ID)
-		if dto.ServerIP != "" {
-			DB.Model(&Tunnel{}).Where("in_node_id = ?", dto.ID).Update("in_ip", node2.IP)
-			DB.Model(&Tunnel{}).Where("out_node_id = ?", dto.ID).Update("out_ip", dto.ServerIP)
-		}
+	if dto.ServerIP != "" {
+		DB.Model(&Tunnel{}).Where("out_node_id = ?", dto.ID).Update("out_ip", dto.ServerIP)
+	}
+	if dto.IP != "" {
+		DB.Model(&Tunnel{}).Where("in_node_id = ?", dto.ID).Update("in_ip", dto.IP)
 	}
 
 	RokMsg(c)
@@ -176,7 +178,7 @@ func HandleNodeInstall(c *gin.Context) {
 
 	serverAddr := processServerAddress(cfg.Value)
 	cmd := fmt.Sprintf(
-		"curl -L https://github.com/ctsunny/panel/releases/download/1.5.0/install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh -a %s -s %s",
+		"curl -L https://github.com/ctsunny/panel/releases/download/1.5.5/install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh -a %s -s %s",
 		serverAddr, node.Secret,
 	)
 	Rok(c, cmd)
