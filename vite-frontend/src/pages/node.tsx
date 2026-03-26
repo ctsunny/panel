@@ -110,6 +110,9 @@ export default function NodePage() {
       if (res.code === 0) {
         setNodeList(res.data.map((node: any) => ({
           ...node,
+          serverIp: node.server_ip ?? node.serverIp,
+          portSta: node.port_sta ?? node.portSta,
+          portEnd: node.port_end ?? node.portEnd,
           connectionStatus: node.status === 1 ? 'online' : 'offline',
           systemInfo: null,
           copyLoading: false
@@ -522,19 +525,23 @@ export default function NodePage() {
         .filter(ip => ip)
         .join(',');
         
-      const submitData = {
-        ...form,
-        ip: ipString
-      };
-      delete (submitData as any).ipString;
-      
       const apiCall = isEdit ? updateNode : createNode;
-      const data = isEdit ? submitData : { 
+      const data = isEdit ? {
+        id: form.id,
+        name: form.name,
+        ip: ipString,
+        server_ip: form.serverIp,
+        port_sta: form.portSta,
+        port_end: form.portEnd,
+        http: form.http,
+        tls: form.tls,
+        socks: form.socks
+      } : { 
         name: form.name, 
         ip: ipString,
-        serverIp: form.serverIp,
-        portSta: form.portSta,
-        portEnd: form.portEnd,
+        server_ip: form.serverIp,
+        port_sta: form.portSta,
+        port_end: form.portEnd,
         http: form.http,
         tls: form.tls,
         socks: form.socks
