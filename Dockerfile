@@ -7,6 +7,10 @@ RUN npm install
 COPY vite-frontend/ .
 RUN npm run build
 
+# Stage 1b: Slim export stage — only contains /app/dist, avoids exporting node_modules (~250 MB)
+FROM scratch AS frontend-dist
+COPY --from=frontend /app/dist /dist
+
 # Stage 2: Build Go backend
 # 在原生架构上通过 Go 内置交叉编译生成目标架构二进制，无需 QEMU
 FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS backend
