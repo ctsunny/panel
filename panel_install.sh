@@ -31,6 +31,20 @@ get_docker_compose_url() {
   fi
 }
 
+# 检测 Linux 发行版，结果存入 DISTRO 变量
+detect_distro() {
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO=$ID
+  elif [ -f /etc/redhat-release ]; then
+    DISTRO="centos"
+  elif [ -f /etc/debian_version ]; then
+    DISTRO="debian"
+  else
+    DISTRO="unknown"
+  fi
+}
+
 # 自动安装 Docker（根据国内外环境选择安装源）
 install_docker() {
   echo "🐳 未检测到 Docker，正在自动安装..."
@@ -48,15 +62,8 @@ install_docker() {
     exit 1
   fi
 
-  # 检测 Linux 发行版
-  if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    DISTRO=$ID
-  elif [ -f /etc/redhat-release ]; then
-    DISTRO="centos"
-  elif [ -f /etc/debian_version ]; then
-    DISTRO="debian"
-  else
+  detect_distro
+  if [ "$DISTRO" = "unknown" ]; then
     echo "❌ 无法识别操作系统，请手动安装 Docker。"
     exit 1
   fi
@@ -65,13 +72,13 @@ install_docker() {
     echo "🌏 检测到国内环境，使用阿里云镜像安装 Docker..."
     case $DISTRO in
       ubuntu|debian)
-        $SUDO_CMD apt-get update -qq
-        $SUDO_CMD apt-get install -y -qq ca-certificates curl gnupg lsb-release
+        $SUDO_CMD apt-get update -q
+        $SUDO_CMD apt-get install -y -q ca-certificates curl gnupg lsb-release
         $SUDO_CMD install -m 0755 -d /etc/apt/keyrings
         curl -fsSL "https://mirrors.aliyun.com/docker-ce/linux/${DISTRO}/gpg" | $SUDO_CMD gpg --dearmor -o /etc/apt/keyrings/docker.gpg
         $SUDO_CMD chmod a+r /etc/apt/keyrings/docker.gpg
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/${DISTRO} $(lsb_release -cs) stable" | $SUDO_CMD tee /etc/apt/sources.list.d/docker.list > /dev/null
-        $SUDO_CMD apt-get update -qq
+        $SUDO_CMD apt-get update -q
         $SUDO_CMD apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
         ;;
       centos|rhel|fedora|rocky|almalinux)
@@ -81,7 +88,7 @@ install_docker() {
         $SUDO_CMD yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
         ;;
       *)
-        echo "⚠️ 不支持的发行版 ($DISTRO)，尝试使用通用安装脚本（国内加速）..."
+        echo "⚠️ 不支持的发行版 ($DISTRO)，回退到官方安装脚本..."
         curl -fsSL https://get.docker.com | $SUDO_CMD sh
         ;;
     esac
@@ -121,23 +128,20 @@ check_docker() {
       else
         SUDO_CMD=""
       fi
-      if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        DISTRO=$ID
-      fi
+      detect_distro
       case $DISTRO in
         ubuntu|debian)
-          $SUDO_CMD apt-get install -y docker-compose-plugin &> /dev/null || true
+          $SUDO_CMD apt-get install -y docker-compose-plugin
           ;;
         centos|rhel|fedora|rocky|almalinux)
-          $SUDO_CMD yum install -y docker-compose-plugin &> /dev/null || true
+          $SUDO_CMD yum install -y docker-compose-plugin
           ;;
       esac
       if docker compose version &> /dev/null; then
         DOCKER_CMD="docker compose"
         echo "✅ docker compose 插件安装成功"
       else
-        echo "❌ 无法启用 docker compose，请更新 Docker 版本。"
+        echo "❌ 无法启用 docker compose，请更新 Docker 版本后重试。"
         exit 1
       fi
     fi
@@ -149,7 +153,7 @@ check_docker() {
     elif command -v docker-compose &> /dev/null; then
       DOCKER_CMD="docker-compose"
     else
-      echo "❌ Docker 已安装但无法找到 compose 命令，请重新登录后重试。"
+      echo "❌ Docker 已安装但未找到 compose 命令，可能需要重新加载 PATH（新开终端后重试）。"
       exit 1
     fi
   fi
