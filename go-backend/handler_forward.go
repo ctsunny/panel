@@ -285,11 +285,10 @@ func HandleForwardUpdate(c *gin.Context) {
 		limiterID = ut.SpeedID
 	}
 
-	// Update GOST services
-	if err := updateForwardGost(&forward, &tunnel, dto); err != nil {
+	// Update GOST services (limiterID is used inside updateForwardGost via getUserTunnelID)
+	if err := updateForwardGostWithLimiter(&forward, &tunnel, dto, limiterID); err != nil {
 		// Still save the forward even if GOST fails
 	}
-	_ = limiterID
 
 	forward.Status = 1
 	DB.Save(&forward)
@@ -297,19 +296,23 @@ func HandleForwardUpdate(c *gin.Context) {
 }
 
 func updateForwardGost(forward *Forward, tunnel *Tunnel, dto UpdateForwardDTO) error {
-	ownerID := forward.UserID
-	utID := getUserTunnelID(ownerID, tunnel.ID)
-	sn := ServiceName(forward.ID, forward.UserID, utID)
-
 	var ut *UserTunnel
 	var utObj UserTunnel
-	if DB.Where("user_id = ? AND tunnel_id = ?", ownerID, tunnel.ID).First(&utObj).Error == nil {
+	if DB.Where("user_id = ? AND tunnel_id = ?", forward.UserID, tunnel.ID).First(&utObj).Error == nil {
 		ut = &utObj
 	}
 	var limiterID *int64
 	if ut != nil {
 		limiterID = ut.SpeedID
 	}
+	return updateForwardGostWithLimiter(forward, tunnel, dto, limiterID)
+}
+
+func updateForwardGostWithLimiter(forward *Forward, tunnel *Tunnel, dto UpdateForwardDTO, limiterID *int64) error {
+	ownerID := forward.UserID
+	utID := getUserTunnelID(ownerID, tunnel.ID)
+	sn := ServiceName(forward.ID, forward.UserID, utID)
+	_ = dto
 
 	if tunnel.Type == 1 {
 		GostUpdateService(tunnel.InNodeID, sn, forward.InPort, limiterID, forward.RemoteAddr, tunnel.Flow, tunnel, forward.Strategy, forward.InterfaceName)

@@ -325,13 +325,3 @@ func getParamInt(params map[string]interface{}, key string) (int, error) {
 	n, err := getParamInt64(params, key)
 	return int(n), err
 }
-
-func ptrInt64(n int64) *int64 { return &n }
-func ptrTime() *int64        { n := nowMs(); return &n }
-func nowMsPtr() *int64       { n := nowMs(); return &n }
-
-var (
-	_ = ptrInt64
-	_ = ptrTime
-	_ = nowMsPtr
-)

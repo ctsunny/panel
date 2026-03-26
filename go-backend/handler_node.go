@@ -176,7 +176,7 @@ func HandleNodeInstall(c *gin.Context) {
 
 	serverAddr := processServerAddress(cfg.Value)
 	cmd := fmt.Sprintf(
-		"curl -L https://github.com/ctsunny/panel/releases/download/1.4.4/install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh -a %s -s %s",
+		"curl -L https://github.com/ctsunny/panel/releases/download/1.5.0/install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh -a %s -s %s",
 		serverAddr, node.Secret,
 	)
 	Rok(c, cmd)
@@ -193,10 +193,13 @@ func validatePortRange(sta, end int) error {
 	return nil
 }
 
-// generateSecret generates a random node secret
+// generateSecret generates a cryptographically random node secret
 func generateSecret() string {
 	b := make([]byte, 16)
-	rand.Read(b) //nolint:errcheck
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: if crypto/rand fails, panic as this is a security-critical operation
+		panic("failed to generate secure random bytes: " + err.Error())
+	}
 	return fmt.Sprintf("%x", b)
 }
 

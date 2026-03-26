@@ -197,12 +197,12 @@ func (h *WSHub) handleNodeMessages(nc *NodeConn) {
 			}
 		}
 
-		// Broadcast to admins (for node info display)
-		h.BroadcastToAdmins(map[string]interface{}{
-			"id":   fmt.Sprintf("%d", nc.nodeID),
-			"type": "info",
-			"data": msg,
-		})
+	// Broadcast to admins (for node info display)
+	h.BroadcastToAdmins(map[string]interface{}{
+		"id":   fmt.Sprintf("%d", nc.nodeID),
+		"type": "info",
+		"data": msg,
+	})
 	}
 }
 
@@ -266,11 +266,17 @@ func (h *WSHub) BroadcastToAdmins(data interface{}) {
 	if err != nil {
 		return
 	}
+	var failedKeys []interface{}
 	h.adminSessions.Range(func(key, value interface{}) bool {
 		conn := value.(*websocket.Conn)
-		conn.WriteMessage(websocket.TextMessage, msgBytes) //nolint:errcheck
+		if err := conn.WriteMessage(websocket.TextMessage, msgBytes); err != nil {
+			failedKeys = append(failedKeys, key)
+		}
 		return true
 	})
+	for _, k := range failedKeys {
+		h.adminSessions.Delete(k)
+	}
 }
 
 func (h *WSHub) sendRaw(nc *NodeConn, msg string) error {

@@ -147,21 +147,18 @@ func updateUserTunnelForwardsSpeed(userID, tunnelID int64, speedID *int64) {
 	var forwards []Forward
 	DB.Where("user_id = ? AND tunnel_id = ?", userID, tunnelID).Find(&forwards)
 
-	for _, f := range forwards {
-		if speedID != nil {
-			var sl SpeedLimit
-			if err := DB.First(&sl, *speedID).Error; err == nil {
-				speed := fmt.Sprintf("%.1f", float64(sl.Speed)/8.0)
-				sn := ServiceName(f.ID, f.UserID, getUserTunnelID(f.UserID, f.TunnelID))
-				// Try update, then add if not found
-				result := GostUpdateLimiters(tunnel.InNodeID, *speedID, speed)
-				if IsNotFound(result) {
-					GostAddLimiters(tunnel.InNodeID, *speedID, speed)
-				}
-				_ = sn // service name computed above
+	if speedID != nil {
+		var sl SpeedLimit
+		if err := DB.First(&sl, *speedID).Error; err == nil {
+			speed := fmt.Sprintf("%.1f", float64(sl.Speed)/8.0)
+			// Try update, then add if not found (limiter is per-tunnel, not per-forward)
+			result := GostUpdateLimiters(tunnel.InNodeID, *speedID, speed)
+			if IsNotFound(result) {
+				GostAddLimiters(tunnel.InNodeID, *speedID, speed)
 			}
 		}
 	}
+	_ = forwards // forwards not needed for limiter update (limiter is shared per speed rule)
 }
 
 func getUserTunnelID(userID, tunnelID int64) int {
