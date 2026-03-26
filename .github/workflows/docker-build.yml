@@ -10,6 +10,16 @@ on:
     branches:
       - main
       - beta
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: '强制重新构建（即使 tag 已存在）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   check-version:
@@ -32,7 +42,13 @@ jobs:
       - name: Check if tag exists and detect changes
         id: check-tag
         run: |
-          if git rev-parse "${{ env.VERSION }}" >/dev/null 2>&1; then
+          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
+          if [ "$FORCE_REBUILD" = "true" ]; then
+            echo "🔨 强制重新构建，跳过 tag 检查"
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "should_build_gost=true" >> $GITHUB_OUTPUT
+          elif git rev-parse "${{ env.VERSION }}" >/dev/null 2>&1; then
             echo "Tag ${{ env.VERSION }} already exists"
             echo "tag_exists=true" >> $GITHUB_OUTPUT
             echo "should_build=false" >> $GITHUB_OUTPUT
@@ -236,7 +252,9 @@ jobs:
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
 
-          # 创建并推送 tag
+          # 创建并推送 tag（如已存在则先删除再创建）
+          git tag -d "${VERSION}" 2>/dev/null || true
+          git push origin ":refs/tags/${VERSION}" 2>/dev/null || true
           git tag "${VERSION}" ${{ github.sha }}
           git push origin "${VERSION}"
 
@@ -244,6 +262,9 @@ jobs:
           COMMIT_MSG=$(git log -1 --pretty=format:"%s")
           COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an")
           COMMIT_DATE=$(git log -1 --pretty=format:"%ai")
+
+          # 删除已有的同名 release（如有），再创建新的
+          gh release delete "${VERSION}" --yes 2>/dev/null || true
 
           # 创建 release
           gh release create "${VERSION}" \
