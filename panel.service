@@ -1,0 +1,13 @@
+[Unit]
+Description=Panel Service
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/panel
+EnvironmentFile=/opt/panel/.env
+ExecStart=/opt/panel/panel
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
