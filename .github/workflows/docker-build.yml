@@ -137,18 +137,24 @@ jobs:
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
             -t ghcr.io/ctsunny/panel:latest \
             -t ghcr.io/ctsunny/panel:${VERSION} \
             -f Dockerfile \
             .
 
-      - name: Build frontend dist tarball
+      - name: Export frontend dist from build cache
+        # 复用上一步 GHA 缓存中的 frontend stage，直接导出 dist，不再重复执行 npm install
+        # frontend 产物与 CPU 架构无关，无需指定 --platform
         run: |
-          cd vite-frontend
-          npm install
-          npm run build
-          cd dist
-          tar -czf ../../frontend-dist.tar.gz .
+          docker buildx build \
+            --target frontend \
+            --output type=local,dest=./frontend-export \
+            --cache-from type=gha \
+            -f Dockerfile \
+            .
+          cd frontend-export/dist && tar -czf ../../frontend-dist.tar.gz . && cd ../..
 
       - name: Upload frontend dist artifact
         uses: actions/upload-artifact@v7
