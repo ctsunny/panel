@@ -194,28 +194,7 @@ func setupStaticFiles(r *gin.Engine) {
 }
 
 func serveRootFiles(r *gin.Engine, staticDir string) {
-	entries, err := os.ReadDir(staticDir)
-	if err != nil {
-		return
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if name == "index.html" {
-			continue // handled by NoRoute
-		}
-		filePath := filepath.Join(staticDir, name)
-		r.GET("/"+name, func(path string) gin.HandlerFunc {
-			return func(c *gin.Context) {
-				c.File(path)
-			}
-		}(filePath))
-	}
-
-	// Walk subdirectories except 'assets' (already served above)
+	// Walk all files except 'assets' (already served via StaticFS) and index.html (handled by NoRoute)
 	_ = filepath.WalkDir(staticDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
