@@ -1,102 +1,61 @@
-# flux-panel转发面板 哆啦A梦转发面板
+# panel — 转发管理面板
 
-## 项目更新说明
-由于一些个人原因，**flux-panel** 将暂停更新一段时间，**恢复更新时间暂不确定**。
+基于 [go-gost/gost](https://github.com/go-gost/gost) 与 [go-gost/x](https://github.com/go-gost/x) 构建的流量转发管理面板，fork 自 [bqlpfy/flux-panel](https://github.com/bqlpfy/flux-panel) 并加入了若干新功能。
 
-在此期间，项目不会继续推进新功能或修复问题，对可能带来的不便表示抱歉。当前已有功能仍可正常使用，也欢迎大家继续 Fork 或自行维护。
+## 新增功能
 
-如后续恢复更新，我会第一时间在仓库中说明。  
-感谢大家的理解与支持。
+- **协议链接导入**：在转发面板的导入对话框中，支持直接粘贴代理协议链接（vmess、vless、trojan、ss、hysteria2、tuic 等），自动识别并填充落地 IP 与端口，无需手动输入。
+- **协议链接导出**：导出时支持"协议格式"选项，将转发规则重新生成为带有修改后入口端口的完整协议链接，方便直接分发。
 
-
-# 赞助商
-<p align="center">
-  <a href="https://vps.town" style="margin: 0 20px; text-align:center;">
-    <img src="./doc/vpstown.png" width="300">
-  </a>
-
-  <a href="https://whmcs.as211392.com" style="margin: 0 20px; text-align:center;">
-    <img src="./doc/as211392.png" width="300">
-  </a>
-</p>
-
-
-本项目基于 [go-gost/gost](https://github.com/go-gost/gost) 和 [go-gost/x](https://github.com/go-gost/x) 两个开源库，实现了转发面板。
----
 ## 特性
 
-- 支持按 **隧道账号级别** 管理流量转发数量，可用于用户/隧道配额控制
-- 支持 **TCP** 和 **UDP** 协议的转发
-- 支持两种转发模式：**端口转发** 与 **隧道转发**
-- 可针对 **指定用户的指定隧道进行限速** 设置
-- 支持配置 **单向或双向流量计费方式**，灵活适配不同计费模型
-- 提供灵活的转发策略配置，适用于多种网络场景
+- 支持按 **隧道/账号级别** 管理转发配额，适用于多用户场景
+- 支持 **TCP** 与 **UDP** 协议转发
+- 两种转发模式：**端口转发** 与 **隧道转发**
+- 针对指定用户的指定隧道进行 **限速** 设置
+- 灵活的 **单向/双向流量计费** 配置
+- 实时流量统计与历史记录
+- 服务暂停 / 恢复
+- 多协议支持（SOCKS4/5、HTTP、TLS、QUIC、WebSocket、Shadowsocks 等）
+- 拖拽排序、连通性诊断
+- 移动端适配（Android / iOS App）
+- 深色 / 浅色主题
 
+## 部署
 
-## 部署流程
----
-### Docker Compose部署
-#### 快速部署
-面板端(稳定版)：
+### Docker Compose 快速部署
+
+**面板端（稳定版）：**
 ```bash
-curl -L https://raw.githubusercontent.com/bqlpfy/flux-panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
-```
-节点端(稳定版)：
-```bash
-curl -L https://raw.githubusercontent.com/bqlpfy/flux-panel/refs/heads/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
-
-```
-
-面板端(开发版)：
-```bash
-curl -L https://raw.githubusercontent.com/bqlpfy/flux-panel/refs/heads/beta/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
-```
-节点端(开发版)：
-```bash
-curl -L https://raw.githubusercontent.com/bqlpfy/flux-panel/refs/heads/beta/install.sh -o install.sh && chmod +x install.sh && ./install.sh
-
+curl -L https://raw.githubusercontent.com/ctsunny/panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
-#### 默认管理员账号
+**节点端（稳定版）：**
+```bash
+curl -L https://raw.githubusercontent.com/ctsunny/panel/refs/heads/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+```
 
-- **账号**: admin_user
-- **密码**: admin_user
+### 默认管理员账号
+
+| 字段 | 值 |
+|------|-----|
+| 账号 | `admin_user` |
+| 密码 | `admin_user` |
 
 > ⚠️ 首次登录后请立即修改默认密码！
 
+## 技术栈
+
+| 层次 | 技术 |
+|------|------|
+| 前端 | React 18 + TypeScript + Vite + HeroUI + Tailwind CSS |
+| 后端 | Spring Boot 2.7 + MyBatis Plus + MySQL 5.7 |
+| 节点引擎 | Go 1.23 + go-gost/gost + go-gost/x |
+| 部署 | Docker Compose + Nginx |
 
 ## 免责声明
 
 本项目仅供个人学习与研究使用，基于开源项目进行二次开发。  
-
-使用本项目所带来的任何风险均由使用者自行承担，包括但不限于：  
-
-- 配置不当或使用错误导致的服务异常或不可用；  
-- 使用本项目引发的网络攻击、封禁、滥用等行为；  
-- 服务器因使用本项目被入侵、渗透、滥用导致的数据泄露、资源消耗或损失；  
-- 因违反当地法律法规所产生的任何法律责任。  
-
-本项目为开源的流量转发工具，仅限合法、合规用途。  
-使用者必须确保其使用行为符合所在国家或地区的法律法规。  
-
-**作者不对因使用本项目导致的任何法律责任、经济损失或其他后果承担责任。**  
-**禁止将本项目用于任何违法或未经授权的行为，包括但不限于网络攻击、数据窃取、非法访问等。**  
-
-如不同意上述条款，请立即停止使用本项目。  
-
-作者对因使用本项目所造成的任何直接或间接损失概不负责，亦不提供任何形式的担保、承诺或技术支持。  
-
-
-请务必在合法、合规、安全的前提下使用本项目。  
-
----
-## ⭐ 喝杯咖啡！（USDT）
-
-| 网络       | 地址                                                                 |
-|------------|----------------------------------------------------------------------|
-| BNB(BEP20) | `0x755492c03728851bbf855daa28a1e089f9aca4d1`                          |
-| TRC20      | `TYh2L3xxXpuJhAcBWnt3yiiADiCSJLgUm7`                                  |
-| Aptos      | `0xf2f9fb14749457748506a8281628d556e8540d1eb586d202cd8b02b99d369ef8`  |
-
-[![Star History Chart](https://api.star-history.com/svg?repos=bqlpfy/flux-panel&type=Date)](https://www.star-history.com/#bqlpfy/flux-panel&Date)
-
+使用本项目产生的任何风险（包括但不限于配置错误、服务异常、法律责任等）均由使用者自行承担。  
+请确保在合法、合规的前提下使用本项目，禁止用于任何违法或未经授权的行为。  
+作者对因使用本项目造成的任何直接或间接损失概不负责。

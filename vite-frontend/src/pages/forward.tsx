@@ -45,6 +45,7 @@ import {
   updateForwardOrder
 } from "@/api";
 import { JwtUtil } from "@/utils/jwt";
+import { batchParseProxyURLs, parseProxyURL, PROTOCOL_LABELS } from "@/utils/proxyParse";
 
 interface Forward {
   id: number;
@@ -183,6 +184,23 @@ export default function ForwardPage() {
     message: string;
     forwardName?: string;
   }>>([]);
+
+  // 协议链接导入相关状态
+  const [importMode, setImportMode] = useState<'standard' | 'protocol'>('standard');
+  const [protocolImportData, setProtocolImportData] = useState('');
+  const [protocolParseResults, setProtocolParseResults] = useState<Array<{
+    line: string;
+    protocol?: string;
+    host?: string;
+    port?: number;
+    name?: string;
+    error?: string;
+  }>>([]);
+  // Cached parsed protocol URL map (remoteAddr → originalUrl), populated after parsing
+  const [parsedProtocolMap, setParsedProtocolMap] = useState<Record<string, string>>({});
+
+  // 导出格式
+  const [exportFormat, setExportFormat] = useState<'standard' | 'protocol'>('standard');
   
   // 表单状态
   const [form, setForm] = useState<ForwardForm>({
@@ -811,6 +829,7 @@ export default function ForwardPage() {
   const handleExport = () => {
     setSelectedTunnelForExport(null);
     setExportData('');
+    setExportFormat('standard');
     setExportModalOpen(true);
   };
 
@@ -845,14 +864,36 @@ export default function ForwardPage() {
         setExportLoading(false);
         return;
       }
-      
-      // 格式化导出数据：remoteAddr|name|inPort
-      const exportLines = forwardsToExport.map(forward => {
-        return `${forward.remoteAddr}|${forward.name}|${forward.inPort}`;
-      });
-      
-      const exportText = exportLines.join('\n');
-      setExportData(exportText);
+
+      if (exportFormat === 'protocol') {
+        // 协议格式导出：用原始协议URL替换端口为入口端口
+        const protocolMap = getProtocolMap();
+        let noProtocol = 0;
+
+        const exportLines = forwardsToExport.map(forward => {
+          const originalUrl = protocolMap[forward.remoteAddr];
+          if (originalUrl && forward.inIp && forward.inPort) {
+            const parsed = parseProxyURL(originalUrl);
+            if (parsed) {
+              return parsed.withAddress(forward.inIp, forward.inPort);
+            }
+          }
+          noProtocol++;
+          return `${forward.remoteAddr}|${forward.name}|${forward.inPort}`;
+        });
+
+        if (noProtocol > 0) {
+          toast(`${noProtocol} 条转发未找到协议记录，已使用标准格式`, { icon: '⚠️' });
+        }
+
+        setExportData(exportLines.join('\n'));
+      } else {
+        // 标准格式导出：remoteAddr|name|inPort
+        const exportLines = forwardsToExport.map(forward => {
+          return `${forward.remoteAddr}|${forward.name}|${forward.inPort}`;
+        });
+        setExportData(exportLines.join('\n'));
+      }
     } catch (error) {
       console.error('导出失败:', error);
       toast.error('导出失败');
@@ -871,7 +912,62 @@ export default function ForwardPage() {
     setImportData('');
     setImportResults([]);
     setSelectedTunnelForImport(null);
+    setImportMode('standard');
+    setProtocolImportData('');
+    setProtocolParseResults([]);
+    setParsedProtocolMap({});
     setImportModalOpen(true);
+  };
+
+  // 协议URL映射 helpers (localStorage)
+  const getProtocolMap = (): Record<string, string> => {
+    try {
+      const stored = localStorage.getItem('proxy-protocol-map');
+      return stored ? JSON.parse(stored) : {};
+    } catch { return {}; }
+  };
+
+  const saveProtocolMap = (map: Record<string, string>) => {
+    try {
+      localStorage.setItem('proxy-protocol-map', JSON.stringify(map));
+    } catch {}
+  };
+
+  // 解析协议链接，转为标准导入格式
+  const handleParseProtocol = () => {
+    if (!protocolImportData.trim()) {
+      toast.error('请粘贴代理协议链接');
+      return;
+    }
+
+    const results = batchParseProxyURLs(protocolImportData);
+    const parseResults = results.map(r => ({
+      line: r.line,
+      protocol: r.parsed?.protocol,
+      host: r.parsed?.host,
+      port: r.parsed?.port,
+      name: r.parsed?.name,
+      error: r.error,
+    }));
+    setProtocolParseResults(parseResults);
+
+    // Cache the mapping of remoteAddr → originalUrl for use in executeImport
+    const newMap: Record<string, string> = {};
+    const successLines = results
+      .filter(r => r.parsed)
+      .map(r => {
+        newMap[`${r.parsed!.host}:${r.parsed!.port}`] = r.parsed!.originalUrl;
+        return `${r.parsed!.host}:${r.parsed!.port}|${r.parsed!.name || r.parsed!.host}`;
+      });
+    setParsedProtocolMap(newMap);
+
+    if (successLines.length === 0) {
+      toast.error('未识别到有效的协议链接');
+      return;
+    }
+
+    setImportData(successLines.join('\n'));
+    toast.success(`已解析 ${successLines.length} 条协议链接`);
   };
 
   // 执行导入
@@ -888,6 +984,13 @@ export default function ForwardPage() {
 
     setImportLoading(true);
     setImportResults([]); // 清空之前的结果
+
+    // 构建协议URL映射 (remoteAddr → originalUrl)，用于后续协议格式导出
+    const protocolMap = getProtocolMap();
+    if (Object.keys(parsedProtocolMap).length > 0) {
+      Object.assign(protocolMap, parsedProtocolMap);
+      saveProtocolMap(protocolMap);
+    }
 
     try {
       const lines = importData.trim().split('\n').filter(line => line.trim());
@@ -1764,11 +1867,33 @@ export default function ForwardPage() {
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-xl font-bold">导出转发数据</h2>
               <p className="text-small text-default-500">
-                格式：目标地址|转发名称|入口端口
+                {exportFormat === 'protocol'
+                  ? '协议格式：将入口地址替换到原始协议链接（需先通过协议链接导入）'
+                  : '标准格式：目标地址|转发名称|入口端口'}
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">
               <div className="space-y-4">
+                {/* 导出格式切换 */}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant={exportFormat === 'standard' ? 'solid' : 'flat'}
+                    color={exportFormat === 'standard' ? 'success' : 'default'}
+                    onPress={() => { setExportFormat('standard'); setExportData(''); }}
+                  >
+                    📋 标准格式
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={exportFormat === 'protocol' ? 'solid' : 'flat'}
+                    color={exportFormat === 'protocol' ? 'success' : 'default'}
+                    onPress={() => { setExportFormat('protocol'); setExportData(''); }}
+                  >
+                    🔗 协议链接格式
+                  </Button>
+                </div>
+
                 {/* 隧道选择 */}
                 <div>
                   <Select
@@ -1778,6 +1903,7 @@ export default function ForwardPage() {
                     onSelectionChange={(keys) => {
                       const selectedKey = Array.from(keys)[0] as string;
                       setSelectedTunnelForExport(selectedKey ? parseInt(selectedKey) : null);
+                      setExportData('');
                     }}
                     variant="bordered"
                     isRequired
@@ -1887,10 +2013,7 @@ export default function ForwardPage() {
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-xl font-bold">导入转发数据</h2>
               <p className="text-small text-default-500">
-                格式：目标地址|转发名称|入口端口，每行一个，入口端口留空将自动分配可用端口
-              </p>
-              <p className="text-small text-default-400">
-                目标地址支持单个地址(如：example.com:8080)或多个地址用逗号分隔(如：3.3.3.3:3,4.4.4.4:4)
+                支持直接粘贴代理协议链接（vmess、vless、trojan、ss、hy2 等）自动解析，或使用标准格式手动输入
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">
@@ -1916,22 +2039,100 @@ export default function ForwardPage() {
                   </Select>
                 </div>
 
-                {/* 输入区域 */}
+                {/* 导入模式切换 */}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant={importMode === 'protocol' ? 'solid' : 'flat'}
+                    color={importMode === 'protocol' ? 'primary' : 'default'}
+                    onPress={() => setImportMode('protocol')}
+                  >
+                    🔗 协议链接解析
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={importMode === 'standard' ? 'solid' : 'flat'}
+                    color={importMode === 'standard' ? 'primary' : 'default'}
+                    onPress={() => setImportMode('standard')}
+                  >
+                    📋 标准格式
+                  </Button>
+                </div>
+
+                {/* 协议链接模式 */}
+                {importMode === 'protocol' && (
+                  <div className="space-y-3">
+                    <Textarea
+                      label="粘贴代理协议链接"
+                      placeholder={"每行一个协议链接，支持：\nvmess://...\nvless://...\ntrojan://...\nss://...\nhysteria2://... / hy2://...\ntuic://..."}
+                      value={protocolImportData}
+                      onChange={(e) => {
+                        setProtocolImportData(e.target.value);
+                        setProtocolParseResults([]);
+                        setParsedProtocolMap({});
+                      }}
+                      variant="flat"
+                      minRows={5}
+                      maxRows={10}
+                      classNames={{ input: "font-mono text-sm" }}
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        color="primary"
+                        onPress={handleParseProtocol}
+                        isDisabled={!protocolImportData.trim()}
+                        startContent={
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 1.414L10.586 9H7a1 1 0 100 2h3.586l-1.293 1.293a1 1 0 101.414 1.414l3-3a1 1 0 000-1.414z" clipRule="evenodd" />
+                          </svg>
+                        }
+                      >
+                        解析并填充
+                      </Button>
+                    </div>
+
+                    {/* 解析结果预览 */}
+                    {protocolParseResults.length > 0 && (
+                      <div>
+                        <p className="text-xs text-default-500 mb-2">
+                          解析结果：成功 {protocolParseResults.filter(r => !r.error).length} / 共 {protocolParseResults.length}
+                        </p>
+                        <div className="max-h-32 overflow-y-auto space-y-1" style={{ scrollbarWidth: 'thin' }}>
+                          {protocolParseResults.map((r, i) => (
+                            <div key={i} className={`px-2 py-1 rounded text-xs flex items-center gap-2 ${r.error ? 'bg-danger-50 dark:bg-danger-100/10 text-danger-600' : 'bg-success-50 dark:bg-success-100/10 text-success-700 dark:text-success-300'}`}>
+                              {r.error ? (
+                                <span>✗ {r.line.length > 40 ? r.line.slice(0, 40) + '…' : r.line} — {r.error}</span>
+                              ) : (
+                                <span>✓ <strong>{r.protocol ? (PROTOCOL_LABELS[r.protocol] ?? r.protocol) : ''}</strong> {r.host}:{r.port} {r.name ? `— ${r.name}` : ''}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 标准格式输入区域 */}
                 <div>
                   <Textarea
-                    label="导入数据"
-                    placeholder="请输入要导入的转发数据，格式：目标地址|转发名称|入口端口"
+                    label={importMode === 'protocol' ? "解析后的标准格式（可手动调整）" : "导入数据"}
+                    placeholder="格式：目标地址:端口|转发名称|入口端口（入口端口留空自动分配）&#10;示例：1.2.3.4:443|节点名|10001"
                     value={importData}
                     onChange={(e) => setImportData(e.target.value)}
                     variant="flat"
-                    minRows={8}
+                    minRows={importMode === 'protocol' ? 4 : 8}
                     maxRows={12}
                     classNames={{
                       input: "font-mono text-sm"
                     }}
                   />
-
-                
+                  {importMode === 'standard' && (
+                    <p className="text-xs text-default-400 mt-1">
+                      目标地址支持单个(如：example.com:8080)或多个用逗号分隔(如：3.3.3.3:80,4.4.4.4:80)
+                    </p>
+                  )}
                 </div>
 
                 {/* 导入结果 */}
