@@ -26,6 +26,10 @@ func main() {
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 	r.Use(CORSMiddleware())
+	if AppConfig.PanelPath != "" {
+		r.Use(PanelGateMiddleware(AppConfig.PanelPath, AppConfig.JWTSecret))
+		log.Println("Panel access path restriction enabled")
+	}
 
 	// --- Flow endpoints (no auth, accessed by GOST nodes) ---
 	r.Any("/flow/upload", HandleFlowUpload)

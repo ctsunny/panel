@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -11,6 +12,9 @@ type Config struct {
 	Port      string
 	LogDir    string
 	StaticDir string
+	AdminUser string
+	AdminPass string
+	PanelPath string
 }
 
 var AppConfig Config
@@ -22,6 +26,9 @@ func LoadConfig() {
 		Port:      getEnv("PORT", "6365"),
 		LogDir:    getEnv("LOG_DIR", "/data/logs"),
 		StaticDir: getEnv("STATIC_DIR", "./static"),
+		AdminUser: getEnv("ADMIN_USER", ""),
+		AdminPass: getEnv("ADMIN_PASS", ""),
+		PanelPath: strings.Trim(getEnv("PANEL_PATH", ""), "/"),
 	}
 
 	if AppConfig.JWTSecret == "default_jwt_secret_please_change" {
