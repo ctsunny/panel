@@ -2,7 +2,7 @@ name: Build and Push Images Based on Version
 
 # 在这里定义统一版本号
 env:
-  VERSION: "1.5.0"
+  VERSION: "1.5.3"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 on:
@@ -275,12 +275,10 @@ jobs:
           - **Date**: ${COMMIT_DATE}
           - **Commit**: [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
 
-          ## 🚀 What's New in v1.5.0
-          - **Go backend**: Rewrote Spring Boot backend in Go — ~15 MB binary, instant startup, minimal memory
-          - **SQLite**: Replaced MySQL with embedded SQLite — zero-dependency, single-file database in \`/data/gost.db\`
-          - **Single container**: Removed separate MySQL + nginx containers; one image serves API + frontend
-          - **Frontend**: Built Vite frontend with minification; served directly by Go binary
-          - **Same API**: All existing API endpoints preserved; existing GOST nodes work without changes" \
+          ## 🚀 What's New in v1.5.3
+          - **Bug fixes**: Fixed merge bug in PanelGateMiddleware indentation
+          - **Install scripts**: Added panel_install.sh for bare-metal installation
+          - **Frontend**: Updated frontend build and static file serving" \
             --repo ${{ github.repository }}
 
           # 上传所有文件到 release
