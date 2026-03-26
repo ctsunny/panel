@@ -164,6 +164,7 @@ type ResetFlowDTO struct {
 
 type CreateNodeDTO struct {
 	Name     string `json:"name" binding:"required"`
+	IP       string `json:"ip" binding:"required"`
 	ServerIP string `json:"server_ip" binding:"required"`
 	PortSta  int    `json:"port_sta" binding:"required"`
 	PortEnd  int    `json:"port_end" binding:"required"`
@@ -172,6 +173,7 @@ type CreateNodeDTO struct {
 type UpdateNodeDTO struct {
 	ID       int64  `json:"id" binding:"required"`
 	Name     string `json:"name"`
+	IP       string `json:"ip"`
 	ServerIP string `json:"server_ip"`
 	PortSta  int    `json:"port_sta"`
 	PortEnd  int    `json:"port_end"`
