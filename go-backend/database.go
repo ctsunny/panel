@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"os"
 
@@ -61,11 +63,20 @@ func seedDefaultData() {
 	var count int64
 	DB.Model(&User{}).Where("role_id = 0").Count(&count)
 	if count == 0 {
+		adminUser := AppConfig.AdminUser
+		if adminUser == "" {
+			adminUser = "admin_user"
+		}
+		adminPass := AppConfig.AdminPass
+		if adminPass == "" {
+			// No password configured; generate a random one to avoid using username as password
+			adminPass = generateRandomPassword()
+			log.Printf("WARNING: ADMIN_PASS not set, generated a random password for admin user %s", adminUser)
+		}
 		now := nowMs()
-		// Default password: admin_user (MD5 = 3c85cdebade1c51cf64ca9f3c09d182d)
 		admin := &User{
-			User:          "admin_user",
-			Pwd:           "3c85cdebade1c51cf64ca9f3c09d182d",
+			User:          adminUser,
+			Pwd:           MD5(adminPass),
 			RoleID:        0,
 			ExpTime:       2727251700000,
 			Flow:          99999,
@@ -77,7 +88,7 @@ func seedDefaultData() {
 			Status:        1,
 		}
 		DB.Create(admin)
-		log.Println("Created default admin user: admin_user / admin_user")
+		log.Printf("Created default admin user: %s", adminUser)
 	}
 
 	// Default app_name config
@@ -99,4 +110,14 @@ func getDirFromPath(path string) string {
 		}
 	}
 	return ""
+}
+
+// generateRandomPassword creates a cryptographically random 16-character hex password.
+func generateRandomPassword() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// Extremely unlikely; fall back to a static value so the server still starts
+		return "changeme_please"
+	}
+	return hex.EncodeToString(b)
 }

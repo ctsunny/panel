@@ -60,6 +60,21 @@ generate_secret() {
   tr -dc 'A-Za-z0-9!@#$%^&*_+-' </dev/urandom | head -c 32
 }
 
+# ─── 生成随机管理员用户名（admin_ + 6位小写字母数字）─────────────────────────
+generate_admin_user() {
+  echo "admin_$(tr -dc 'a-z0-9' </dev/urandom | head -c 6)"
+}
+
+# ─── 生成随机管理员密码（16位大小写字母数字）──────────────────────────────────
+generate_admin_pass() {
+  tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16
+}
+
+# ─── 生成随机面板访问路径（8位小写字母数字）───────────────────────────────────
+generate_panel_path() {
+  tr -dc 'a-z0-9' </dev/urandom | head -c 8
+}
+
 # ─── 显示菜单 ─────────────────────────────────────────────────────────────────
 show_menu() {
   echo "==============================================="
@@ -112,12 +127,18 @@ install_panel() {
     echo "⏭️ 保留已有环境配置: $ENV_FILE"
   else
     JWT_SECRET=$(generate_secret)
+    ADMIN_USER=$(generate_admin_user)
+    ADMIN_PASS=$(generate_admin_pass)
+    PANEL_PATH=$(generate_panel_path)
     $SUDO_CMD tee "$ENV_FILE" > /dev/null <<EOF
 PORT=6365
 DB_PATH=${DATA_DIR}/gost.db
 STATIC_DIR=${STATIC_DIR}
 JWT_SECRET=${JWT_SECRET}
 LOG_DIR=${DATA_DIR}/logs
+ADMIN_USER=${ADMIN_USER}
+ADMIN_PASS=${ADMIN_PASS}
+PANEL_PATH=${PANEL_PATH}
 EOF
     $SUDO_CMD chmod 600 "$ENV_FILE"
     echo "✅ 环境配置已写入: $ENV_FILE"
@@ -145,11 +166,28 @@ EOF
   $SUDO_CMD systemctl start panel
 
   if $SUDO_CMD systemctl is-active --quiet panel; then
+    # Read credentials from .env for display (handles both new and existing installs)
+    DISPLAY_USER=$(grep '^ADMIN_USER=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    DISPLAY_PASS=$(grep '^ADMIN_PASS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    DISPLAY_PATH=$(grep '^PANEL_PATH=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    DISPLAY_PORT=$(grep '^PORT=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    DISPLAY_PORT="${DISPLAY_PORT:-6365}"
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+
     echo ""
     echo "✅ 安装完成！Panel 已启动并设置为开机自启。"
     echo "📁 安装目录: $INSTALL_DIR"
     echo "🗄️ 数据目录: $DATA_DIR"
-    echo "🌐 访问地址: http://$(hostname -I | awk '{print $1}'):6365"
+    if [[ -n "$DISPLAY_PATH" ]]; then
+      echo "🌐 访问地址: http://${SERVER_IP}:${DISPLAY_PORT}/${DISPLAY_PATH}/"
+    else
+      echo "🌐 访问地址: http://${SERVER_IP}:${DISPLAY_PORT}/"
+    fi
+    if [[ -n "$DISPLAY_USER" ]]; then
+      echo "👤 管理员账号: $DISPLAY_USER"
+      echo "🔑 管理员密码: $DISPLAY_PASS"
+      echo "⚠️  请立即记录以上账号密码，安装完成后无法再次查看！"
+    fi
     echo "🔧 查看日志: journalctl -u panel -f"
     echo "🔧 服务状态: systemctl status panel"
   else
