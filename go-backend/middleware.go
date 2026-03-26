@@ -116,8 +116,8 @@ func PanelGateMiddleware(panelPath string, jwtSecret string) gin.HandlerFunc {
 		// The secret entry point: set the access cookie and redirect to "/"
 		if path == entryFull || path == entryTrail {
 			// secure=false is intentional: the panel runs over plain HTTP; setting secure=true
-		// would prevent the cookie from being sent and break the feature entirely. // lgtm[go/cookie-secure-not-set]
-		c.SetCookie(cookieName, cookieToken, 86400*30, "/", "", false, true)
+			// would prevent the cookie from being sent and break the feature entirely. // lgtm[go/cookie-secure-not-set]
+			c.SetCookie(cookieName, cookieToken, 86400*30, "/", "", false, true)
 			c.Redirect(http.StatusFound, "/")
 			c.Abort()
 			return
