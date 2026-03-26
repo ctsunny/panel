@@ -144,11 +144,11 @@ jobs:
             .
 
       - name: Export frontend dist from build cache
-        # 复用上一步 GHA 缓存中的 frontend stage，直接导出 dist，不再重复执行 npm install
+        # 复用上一步 GHA 缓存中的 frontend-dist stage，仅导出 dist 目录（跳过 node_modules ~250 MB）
         # frontend 产物与 CPU 架构无关，无需指定 --platform
         run: |
           docker buildx build \
-            --target frontend \
+            --target frontend-dist \
             --output type=local,dest=./frontend-export \
             --cache-from type=gha \
             -f Dockerfile \
@@ -298,11 +298,6 @@ jobs:
           echo "📤 上传安装脚本..."
           gh release upload "${VERSION}" ./install.sh --clobber
           gh release upload "${VERSION}" ./panel_install.sh --clobber
-          gh release upload "${VERSION}" ./bare_install.sh --clobber
-
-          echo "📤 上传 Docker Compose 配置文件..."
-          gh release upload "${VERSION}" ./docker-compose-v4.yml --clobber
-          gh release upload "${VERSION}" ./docker-compose-v6.yml --clobber
 
           echo "📤 上传 systemd service 文件..."
           gh release upload "${VERSION}" ./panel.service --clobber
@@ -370,10 +365,7 @@ jobs:
 
           gh release upload "${VERSION}" ./install.sh --clobber
           gh release upload "${VERSION}" ./panel_install.sh --clobber
-          gh release upload "${VERSION}" ./bare_install.sh --clobber
           gh release upload "${VERSION}" ./panel.service --clobber
-          gh release upload "${VERSION}" ./docker-compose-v4.yml --clobber
-          gh release upload "${VERSION}" ./docker-compose-v6.yml --clobber
 
           echo "✅ 文件更新完成！"
           echo "ℹ️ Docker 镜像和 GOST 二进制未重新构建"

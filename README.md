@@ -18,19 +18,19 @@
 - 服务暂停 / 恢复
 - 多协议支持（SOCKS4/5、HTTP、TLS、QUIC、WebSocket、Shadowsocks 等）
 - 拖拽排序、连通性诊断
-- 移动端适配（Android / iOS App）
+- 移动端浏览器适配
 - 深色 / 浅色主题
 
 ## 部署
 
-### Docker Compose 快速部署
+### 快速安装（直接安装，无需 Docker）
 
-**面板端（稳定版）：**
+**面板端：**
 ```bash
 curl -L https://raw.githubusercontent.com/ctsunny/panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
-**节点端（稳定版）：**
+**节点端：**
 ```bash
 curl -L https://raw.githubusercontent.com/ctsunny/panel/refs/heads/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
 ```
@@ -49,16 +49,15 @@ curl -L https://raw.githubusercontent.com/ctsunny/panel/refs/heads/main/install.
 | 层次 | 技术 |
 |------|------|
 | 前端 | React 18 + TypeScript + Vite + HeroUI + Tailwind CSS |
-| 后端 | Spring Boot 2.7 + MyBatis Plus + MySQL 5.7 |
+| 后端 | Go 1.23 + SQLite（单文件数据库） |
 | 节点引擎 | Go 1.23 + go-gost/gost + go-gost/x |
-| 部署 | Docker Compose + Nginx |
+| 部署 | systemd 直接运行 / Docker 可选 |
 
 ## Docker 镜像
 
 | 组件 | 镜像 |
 |------|------|
-| 前端 | `ctsunny/panel-frontend` |
-| 后端 | `ctsunny/panel-backend` |
+| 面板 | `ghcr.io/ctsunny/panel` |
 
 ## 免责声明
 

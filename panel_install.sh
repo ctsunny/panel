@@ -1,1211 +1,257 @@
 #!/bin/bash
 set -e
 
-# 解决 macOS 下 tr 可能出现的非法字节序列问题
 export LANG=en_US.UTF-8
 export LC_ALL=C
 
+INSTALL_DIR="/opt/panel"
+SERVICE_FILE="/etc/systemd/system/panel.service"
+ENV_FILE="$INSTALL_DIR/.env"
+STATIC_DIR="$INSTALL_DIR/static"
+DATA_DIR="$INSTALL_DIR/data"
 
+REPO="ctsunny/panel"
 
-# 全局下载地址配置
-DOCKER_COMPOSEV4_URL="https://raw.githubusercontent.com/ctsunny/panel/main/docker-compose-v4.yml"
-DOCKER_COMPOSEV6_URL="https://raw.githubusercontent.com/ctsunny/panel/main/docker-compose-v6.yml"
-GOST_SQL_URL="https://raw.githubusercontent.com/ctsunny/panel/main/gost.sql"
+# ─── 检测架构 ────────────────────────────────────────────────────────────────
+get_arch() {
+  case $(uname -m) in
+    x86_64)        echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *)             echo "amd64" ;;
+  esac
+}
+ARCH=$(get_arch)
 
-COUNTRY=$(curl -s https://ipinfo.io/country)
-if [ "$COUNTRY" = "CN" ]; then
-    # 拼接 URL
-    DOCKER_COMPOSEV4_URL="https://ghfast.top/${DOCKER_COMPOSEV4_URL}"
-    DOCKER_COMPOSEV6_URL="https://ghfast.top/${DOCKER_COMPOSEV6_URL}"
-    GOST_SQL_URL="https://ghfast.top/${GOST_SQL_URL}"
+# ─── 检测国内环境，选择加速镜像 ──────────────────────────────────────────────
+COUNTRY=$(curl -s --max-time 5 https://ipinfo.io/country 2>/dev/null || true)
+proxy_url() {
+  local url="$1"
+  if [ "$COUNTRY" = "CN" ]; then
+    echo "https://ghfast.top/${url}"
+  else
+    echo "$url"
+  fi
+}
+
+# ─── 获取最新版本号 ────────────────────────────────────────────────────────────
+get_latest_version() {
+  curl -s "https://api.github.com/repos/${REPO}/releases/latest" \
+    | grep '"tag_name"' \
+    | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
+# ─── 构建下载地址 ──────────────────────────────────────────────────────────────
+build_urls() {
+  local ver="$1"
+  PANEL_URL=$(proxy_url "https://github.com/${REPO}/releases/download/${ver}/panel-${ARCH}")
+  FRONTEND_URL=$(proxy_url "https://github.com/${REPO}/releases/download/${ver}/frontend-dist.tar.gz")
+  SERVICE_URL=$(proxy_url "https://raw.githubusercontent.com/${REPO}/main/panel.service")
+}
+
+# ─── 检查 root / sudo ─────────────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+  SUDO_CMD="sudo"
+else
+  SUDO_CMD=""
 fi
 
-
-
-# 根据IPv6支持情况选择docker-compose URL
-get_docker_compose_url() {
-  if check_ipv6_support > /dev/null 2>&1; then
-    echo "$DOCKER_COMPOSEV6_URL"
-  else
-    echo "$DOCKER_COMPOSEV4_URL"
-  fi
+# ─── 生成随机 JWT_SECRET ───────────────────────────────────────────────────────
+generate_secret() {
+  tr -dc 'A-Za-z0-9!@#$%^&*_+-' </dev/urandom | head -c 32
 }
 
-# 检测 Linux 发行版，结果存入 DISTRO 变量
-detect_distro() {
-  if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    DISTRO=$ID
-  elif [ -f /etc/redhat-release ]; then
-    DISTRO="centos"
-  elif [ -f /etc/debian_version ]; then
-    DISTRO="debian"
-  else
-    DISTRO="unknown"
-  fi
-}
-
-# 自动安装 Docker（根据国内外环境选择安装源）
-install_docker() {
-  echo "🐳 未检测到 Docker，正在自动安装..."
-
-  # 检查是否需要 sudo
-  if [[ $EUID -ne 0 ]]; then
-    SUDO_CMD="sudo"
-  else
-    SUDO_CMD=""
-  fi
-
-  OS_TYPE=$(uname -s)
-  if [[ "$OS_TYPE" == "Darwin" ]]; then
-    echo "❌ macOS 环境请手动安装 Docker Desktop：https://www.docker.com/products/docker-desktop"
-    exit 1
-  fi
-
-  detect_distro
-  if [ "$DISTRO" = "unknown" ]; then
-    echo "❌ 无法识别操作系统，请手动安装 Docker。"
-    exit 1
-  fi
-
-  if [ "$COUNTRY" = "CN" ]; then
-    echo "🌏 检测到国内环境，使用阿里云镜像安装 Docker..."
-    case $DISTRO in
-      ubuntu|debian)
-        $SUDO_CMD apt-get update -q
-        $SUDO_CMD apt-get install -y -q ca-certificates curl gnupg lsb-release
-        $SUDO_CMD install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL "https://mirrors.aliyun.com/docker-ce/linux/${DISTRO}/gpg" | $SUDO_CMD gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-        $SUDO_CMD chmod a+r /etc/apt/keyrings/docker.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/${DISTRO} $(lsb_release -cs) stable" | $SUDO_CMD tee /etc/apt/sources.list.d/docker.list > /dev/null
-        $SUDO_CMD apt-get update -q
-        $SUDO_CMD apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-        ;;
-      centos|rhel|fedora|rocky|almalinux)
-        $SUDO_CMD yum install -y -q yum-utils
-        $SUDO_CMD yum-config-manager --add-repo https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
-        $SUDO_CMD sed -i 's+download.docker.com+mirrors.aliyun.com/docker-ce+' /etc/yum.repos.d/docker-ce.repo
-        $SUDO_CMD yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-        ;;
-      *)
-        echo "⚠️ 不支持的发行版 ($DISTRO)，回退到官方安装脚本..."
-        curl -fsSL https://get.docker.com | $SUDO_CMD sh
-        ;;
-    esac
-  else
-    echo "🌐 检测到国际环境，使用官方脚本安装 Docker..."
-    curl -fsSL https://get.docker.com | $SUDO_CMD sh
-  fi
-
-  # 启动 Docker 服务
-  if command -v systemctl &> /dev/null; then
-    $SUDO_CMD systemctl enable docker
-    $SUDO_CMD systemctl start docker
-  elif command -v service &> /dev/null; then
-    $SUDO_CMD service docker start
-  fi
-
-  # 验证安装结果
-  if command -v docker &> /dev/null; then
-    echo "✅ Docker 安装成功：$(docker --version)"
-  else
-    echo "❌ Docker 安装失败，请手动安装后重试。"
-    exit 1
-  fi
-}
-
-# 检查 docker-compose 或 docker compose 命令
-check_docker() {
-  if command -v docker-compose &> /dev/null; then
-    DOCKER_CMD="docker-compose"
-  elif command -v docker &> /dev/null; then
-    if docker compose version &> /dev/null; then
-      DOCKER_CMD="docker compose"
-    else
-      echo "⚠️ 检测到 docker，但不支持 'docker compose' 插件，尝试安装 docker-compose-plugin..."
-      if [[ $EUID -ne 0 ]]; then
-        SUDO_CMD="sudo"
-      else
-        SUDO_CMD=""
-      fi
-      detect_distro
-      case $DISTRO in
-        ubuntu|debian)
-          $SUDO_CMD apt-get install -y docker-compose-plugin
-          ;;
-        centos|rhel|fedora|rocky|almalinux)
-          $SUDO_CMD yum install -y docker-compose-plugin
-          ;;
-      esac
-      if docker compose version &> /dev/null; then
-        DOCKER_CMD="docker compose"
-        echo "✅ docker compose 插件安装成功"
-      else
-        echo "❌ 无法启用 docker compose，请更新 Docker 版本后重试。"
-        exit 1
-      fi
-    fi
-  else
-    install_docker
-    # 安装后重新检测命令
-    if docker compose version &> /dev/null; then
-      DOCKER_CMD="docker compose"
-    elif command -v docker-compose &> /dev/null; then
-      DOCKER_CMD="docker-compose"
-    else
-      echo "❌ Docker 已安装但未找到 compose 命令，可能需要重新加载 PATH（新开终端后重试）。"
-      exit 1
-    fi
-  fi
-  echo "✅ 检测到 Docker 命令：$DOCKER_CMD"
-}
-
-# 检测系统是否支持 IPv6
-check_ipv6_support() {
-  echo "🔍 检测 IPv6 支持..."
-
-  # 检查是否有 IPv6 地址（排除 link-local 地址）
-  if ip -6 addr show | grep -v "scope link" | grep -q "inet6"; then
-    echo "✅ 检测到系统支持 IPv6"
-    return 0
-  elif ifconfig 2>/dev/null | grep -v "fe80:" | grep -q "inet6"; then
-    echo "✅ 检测到系统支持 IPv6"
-    return 0
-  else
-    echo "⚠️ 未检测到 IPv6 支持"
-    return 1
-  fi
-}
-
-
-
-# 配置 Docker 启用 IPv6
-configure_docker_ipv6() {
-  echo "🔧 配置 Docker IPv6 支持..."
-
-  # 检查操作系统类型
-  OS_TYPE=$(uname -s)
-
-  if [[ "$OS_TYPE" == "Darwin" ]]; then
-    # macOS 上 Docker Desktop 已默认支持 IPv6
-    echo "✅ macOS Docker Desktop 默认支持 IPv6"
-    return 0
-  fi
-
-  # Docker daemon 配置文件路径
-  DOCKER_CONFIG="/etc/docker/daemon.json"
-
-  # 检查是否需要 sudo
-  if [[ $EUID -ne 0 ]]; then
-    SUDO_CMD="sudo"
-  else
-    SUDO_CMD=""
-  fi
-
-  # 检查 Docker 配置文件
-  if [ -f "$DOCKER_CONFIG" ]; then
-    # 检查是否已经配置了 IPv6
-    if grep -q '"ipv6"' "$DOCKER_CONFIG"; then
-      echo "✅ Docker 已配置 IPv6 支持"
-    else
-      echo "📝 更新 Docker 配置以启用 IPv6..."
-      # 备份原配置
-      $SUDO_CMD cp "$DOCKER_CONFIG" "${DOCKER_CONFIG}.backup"
-
-      # 使用 jq 或 sed 添加 IPv6 配置
-      if command -v jq &> /dev/null; then
-        $SUDO_CMD jq '. + {"ipv6": true, "fixed-cidr-v6": "fd00::/80"}' "$DOCKER_CONFIG" > /tmp/daemon.json && $SUDO_CMD mv /tmp/daemon.json "$DOCKER_CONFIG"
-      else
-        # 如果没有 jq，使用 sed
-        $SUDO_CMD sed -i 's/^{$/{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
-      fi
-
-      echo "🔄 重启 Docker 服务..."
-      if command -v systemctl &> /dev/null; then
-        $SUDO_CMD systemctl restart docker
-      elif command -v service &> /dev/null; then
-        $SUDO_CMD service docker restart
-      else
-        echo "⚠️ 请手动重启 Docker 服务"
-      fi
-      sleep 5
-    fi
-  else
-    # 创建新的配置文件
-    echo "📝 创建 Docker 配置文件..."
-    $SUDO_CMD mkdir -p /etc/docker
-    echo '{
-  "ipv6": true,
-  "fixed-cidr-v6": "fd00::/80"
-}' | $SUDO_CMD tee "$DOCKER_CONFIG" > /dev/null
-
-    echo "🔄 重启 Docker 服务..."
-    if command -v systemctl &> /dev/null; then
-      $SUDO_CMD systemctl restart docker
-    elif command -v service &> /dev/null; then
-      $SUDO_CMD service docker restart
-    else
-      echo "⚠️ 请手动重启 Docker 服务"
-    fi
-    sleep 5
-  fi
-}
-
-# 显示菜单
+# ─── 显示菜单 ─────────────────────────────────────────────────────────────────
 show_menu() {
   echo "==============================================="
-  echo "          面板管理脚本"
+  echo "          Panel 裸机安装管理脚本"
   echo "==============================================="
-  echo "请选择操作："
-  echo "1. 安装面板"
-  echo "2. 更新面板"
-  echo "3. 卸载面板"
-  echo "4. 导出备份"
-  echo "5. 退出"
+  echo "1. 安装"
+  echo "2. 更新"
+  echo "3. 卸载"
+  echo "4. 退出"
   echo "==============================================="
 }
 
-generate_random() {
-  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c16
-}
-
-# 删除脚本自身
-delete_self() {
-  echo ""
-  echo "🗑️ 操作已完成，正在清理脚本文件..."
-  SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
-  sleep 1
-  rm -f "$SCRIPT_PATH" && echo "✅ 脚本文件已删除" || echo "❌ 删除脚本文件失败"
-}
-
-
-
-# 获取用户输入的配置参数
-get_config_params() {
-  echo "🔧 请输入配置参数："
-
-  read -p "面板端口（默认 6365）: " PANEL_PORT
-  PANEL_PORT=${PANEL_PORT:-6365}
-
-  JWT_SECRET=$(generate_random)
-}
-
-# 安装功能
+# ─── 安装 ─────────────────────────────────────────────────────────────────────
 install_panel() {
-  echo "🚀 开始安装面板..."
-  check_docker
-  get_config_params
+  echo "🚀 开始安装 Panel..."
 
-  echo "🔽 下载必要文件..."
-  DOCKER_COMPOSE_URL=$(get_docker_compose_url)
-  echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-  curl -L -o docker-compose.yml "$DOCKER_COMPOSE_URL"
+  VERSION=$(get_latest_version)
+  if [[ -z "$VERSION" ]]; then
+    echo "❌ 无法获取最新版本号，请检查网络连接。"
+    exit 1
+  fi
+  echo "📦 版本: $VERSION"
+  build_urls "$VERSION"
 
-  echo "✅ 文件准备完成"
+  $SUDO_CMD mkdir -p "$INSTALL_DIR" "$STATIC_DIR" "$DATA_DIR/logs"
 
-  # 自动检测并配置 IPv6 支持
-  if check_ipv6_support; then
-    echo "🚀 系统支持 IPv6，自动启用 IPv6 配置..."
-    configure_docker_ipv6
+  # 停止已有服务
+  if systemctl list-units --full -all 2>/dev/null | grep -Fq "panel.service"; then
+    echo "🛑 停止已有 panel 服务..."
+    $SUDO_CMD systemctl stop panel 2>/dev/null || true
+    $SUDO_CMD systemctl disable panel 2>/dev/null || true
   fi
 
-  cat > .env <<EOF
-JWT_SECRET=$JWT_SECRET
-PANEL_PORT=$PANEL_PORT
-VERSION=latest
+  # 下载二进制
+  echo "⬇️ 下载 panel-${ARCH}..."
+  $SUDO_CMD curl -fL "$PANEL_URL" -o "$INSTALL_DIR/panel"
+  $SUDO_CMD chmod +x "$INSTALL_DIR/panel"
+  echo "✅ panel 下载完成"
+
+  # 下载并解压前端
+  echo "⬇️ 下载前端静态文件..."
+  TMP_FRONT=$(mktemp /tmp/frontend-dist.XXXXXX.tar.gz)
+  curl -fL "$FRONTEND_URL" -o "$TMP_FRONT"
+  $SUDO_CMD tar -xzf "$TMP_FRONT" -C "$STATIC_DIR"
+  rm -f "$TMP_FRONT"
+  echo "✅ 前端静态文件解压完成"
+
+  # 生成或保留 JWT_SECRET
+  if [[ -f "$ENV_FILE" ]]; then
+    echo "⏭️ 保留已有环境配置: $ENV_FILE"
+  else
+    JWT_SECRET=$(generate_secret)
+    $SUDO_CMD tee "$ENV_FILE" > /dev/null <<EOF
+PORT=6365
+DB_PATH=${DATA_DIR}/gost.db
+STATIC_DIR=${STATIC_DIR}
+JWT_SECRET=${JWT_SECRET}
+LOG_DIR=${DATA_DIR}/logs
+EOF
+    $SUDO_CMD chmod 600 "$ENV_FILE"
+    echo "✅ 环境配置已写入: $ENV_FILE"
+  fi
+
+  # 写入 systemd service
+  $SUDO_CMD tee "$SERVICE_FILE" > /dev/null <<EOF
+[Unit]
+Description=Panel Service
+After=network.target
+
+[Service]
+WorkingDirectory=${INSTALL_DIR}
+EnvironmentFile=${ENV_FILE}
+ExecStart=${INSTALL_DIR}/panel
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-  echo "🚀 启动 docker 服务..."
-  $DOCKER_CMD up -d
+  $SUDO_CMD systemctl daemon-reload
+  $SUDO_CMD systemctl enable panel
+  $SUDO_CMD systemctl start panel
 
-  echo "🎉 部署完成"
-  echo "🌐 访问地址: http://服务器IP:$PANEL_PORT"
-  echo "📖 部署完成后请阅读下使用文档，求求了啊，不要上去就是一顿操作"
-  echo "📚 文档地址: https://tes.cc/guide.html"
-  echo "💡 默认管理员账号: admin_user / admin_user"
-  echo "⚠️  登录后请立即修改默认密码！"
-
-
+  if $SUDO_CMD systemctl is-active --quiet panel; then
+    echo ""
+    echo "✅ 安装完成！Panel 已启动并设置为开机自启。"
+    echo "📁 安装目录: $INSTALL_DIR"
+    echo "🗄️ 数据目录: $DATA_DIR"
+    echo "🌐 访问地址: http://$(hostname -I | awk '{print $1}'):6365"
+    echo "🔧 查看日志: journalctl -u panel -f"
+    echo "🔧 服务状态: systemctl status panel"
+  else
+    echo "❌ Panel 服务启动失败，请执行以下命令查看日志："
+    echo "journalctl -u panel -f"
+    exit 1
+  fi
 }
 
-# 更新功能
+# ─── 更新 ─────────────────────────────────────────────────────────────────────
 update_panel() {
-  echo "🔄 开始更新面板..."
-  check_docker
+  echo "🔄 开始更新 Panel..."
 
-  echo "🔽 下载最新配置文件..."
-  DOCKER_COMPOSE_URL=$(get_docker_compose_url)
-  echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-  curl -L -o docker-compose.yml "$DOCKER_COMPOSE_URL"
-  echo "✅ 下载完成"
-
-  # 自动检测并配置 IPv6 支持
-  if check_ipv6_support; then
-    echo "🚀 系统支持 IPv6，自动启用 IPv6 配置..."
-    configure_docker_ipv6
-  fi
-
-  echo "🛑 停止当前服务..."
-  $DOCKER_CMD down
-
-  echo "⬇️ 拉取最新镜像..."
-  $DOCKER_CMD pull
-
-  echo "🚀 启动更新后的服务..."
-  $DOCKER_CMD up -d
-
-  # 等待服务启动
-  echo "⏳ 等待服务启动..."
-
-  # 检查后端容器健康状态
-  echo "🔍 检查后端服务状态..."
-  for i in {1..90}; do
-    if docker ps --format "{{.Names}}" | grep -q "^springboot-backend$"; then
-      BACKEND_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' springboot-backend 2>/dev/null || echo "unknown")
-      if [[ "$BACKEND_HEALTH" == "healthy" ]]; then
-        echo "✅ 后端服务健康检查通过"
-        break
-      elif [[ "$BACKEND_HEALTH" == "starting" ]]; then
-        # 继续等待
-        :
-      elif [[ "$BACKEND_HEALTH" == "unhealthy" ]]; then
-        echo "⚠️ 后端健康状态：$BACKEND_HEALTH"
-      fi
-    else
-      echo "⚠️ 后端容器未找到或未运行"
-      BACKEND_HEALTH="not_running"
-    fi
-    if [ $i -eq 90 ]; then
-      echo "❌ 后端服务启动超时（90秒）"
-      echo "🔍 当前状态：$(docker inspect -f '{{.State.Health.Status}}' springboot-backend 2>/dev/null || echo '容器不存在')"
-      echo "🛑 更新终止"
-      return 1
-    fi
-    # 每15秒显示一次进度
-    if [ $((i % 15)) -eq 1 ]; then
-      echo "⏳ 等待后端服务启动... ($i/90) 状态：${BACKEND_HEALTH:-unknown}"
-    fi
-    sleep 1
-  done
-
-  # 检查数据库容器健康状态
-  echo "🔍 检查数据库服务状态..."
-  for i in {1..60}; do
-    if docker ps --format "{{.Names}}" | grep -q "^gost-mysql$"; then
-      DB_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' gost-mysql 2>/dev/null || echo "unknown")
-      if [[ "$DB_HEALTH" == "healthy" ]]; then
-        echo "✅ 数据库服务健康检查通过"
-        break
-      elif [[ "$DB_HEALTH" == "starting" ]]; then
-        # 继续等待
-        :
-      elif [[ "$DB_HEALTH" == "unhealthy" ]]; then
-        echo "⚠️ 数据库健康状态：$DB_HEALTH"
-      fi
-    else
-      echo "⚠️ 数据库容器未找到或未运行"
-      DB_HEALTH="not_running"
-    fi
-    if [ $i -eq 60 ]; then
-      echo "❌ 数据库服务启动超时（60秒）"
-      echo "🔍 当前状态：$(docker inspect -f '{{.State.Health.Status}}' gost-mysql 2>/dev/null || echo '容器不存在')"
-      echo "🛑 更新终止"
-      return 1
-    fi
-    # 每10秒显示一次进度
-    if [ $((i % 10)) -eq 1 ]; then
-      echo "⏳ 等待数据库服务启动... ($i/60) 状态：${DB_HEALTH:-unknown}"
-    fi
-    sleep 1
-  done
-
-  # 从容器环境变量获取数据库信息
-  echo "🔍 获取数据库配置信息..."
-
-  # 等待一下让服务完全就绪
-  echo "⏳ 等待服务完全就绪..."
-  sleep 5
-
-  # 先检查后端容器是否在运行
-  if ! docker ps --format "{{.Names}}" | grep -q "^springboot-backend$"; then
-    echo "❌ 后端容器未运行，无法获取数据库配置"
-    echo "🔍 当前运行的容器："
-    docker ps --format "table {{.Names}}\t{{.Status}}"
-    echo "🛑 更新终止"
+  if [[ ! -f "$INSTALL_DIR/panel" ]]; then
+    echo "❌ Panel 未安装，请先选择安装。"
     return 1
   fi
 
-  DB_INFO=$(docker exec springboot-backend env | grep "^DB_" 2>/dev/null || echo "")
+  VERSION=$(get_latest_version)
+  if [[ -z "$VERSION" ]]; then
+    echo "❌ 无法获取最新版本号，请检查网络连接。"
+    exit 1
+  fi
+  echo "📦 最新版本: $VERSION"
+  build_urls "$VERSION"
 
-  if [[ -n "$DB_INFO" ]]; then
-    DB_NAME=$(echo "$DB_INFO" | grep "^DB_NAME=" | cut -d'=' -f2)
-    DB_PASSWORD=$(echo "$DB_INFO" | grep "^DB_PASSWORD=" | cut -d'=' -f2)
-    DB_USER=$(echo "$DB_INFO" | grep "^DB_USER=" | cut -d'=' -f2)
-    DB_HOST=$(echo "$DB_INFO" | grep "^DB_HOST=" | cut -d'=' -f2)
+  # 下载新二进制到临时文件
+  echo "⬇️ 下载 panel-${ARCH}..."
+  TMP_BIN=$(mktemp /tmp/panel.XXXXXX)
+  curl -fL "$PANEL_URL" -o "$TMP_BIN"
+  chmod +x "$TMP_BIN"
 
-    echo "📋 数据库配置："
-    echo "   数据库名: $DB_NAME"
-    echo "   用户名: $DB_USER"
-    echo "   主机: $DB_HOST"
-  else
-    echo "❌ 无法获取数据库配置信息"
-    echo "🔍 尝试诊断问题："
-    echo "   容器状态: $(docker inspect -f '{{.State.Status}}' springboot-backend 2>/dev/null || echo '容器不存在')"
-    echo "   健康状态: $(docker inspect -f '{{.State.Health.Status}}' springboot-backend 2>/dev/null || echo '无健康检查')"
+  # 下载并解压前端
+  echo "⬇️ 下载前端静态文件..."
+  TMP_FRONT=$(mktemp /tmp/frontend-dist.XXXXXX.tar.gz)
+  curl -fL "$FRONTEND_URL" -o "$TMP_FRONT"
 
-    # 尝试从 .env 文件读取配置
-    if [[ -f ".env" ]]; then
-      echo "🔄 尝试从 .env 文件读取配置..."
-      DB_NAME=$(grep "^DB_NAME=" .env | cut -d'=' -f2 2>/dev/null)
-      DB_PASSWORD=$(grep "^DB_PASSWORD=" .env | cut -d'=' -f2 2>/dev/null)
-      DB_USER=$(grep "^DB_USER=" .env | cut -d'=' -f2 2>/dev/null)
-
-      if [[ -n "$DB_NAME" && -n "$DB_PASSWORD" && -n "$DB_USER" ]]; then
-        echo "✅ 从 .env 文件成功读取数据库配置"
-        echo "📋 数据库配置："
-        echo "   数据库名: $DB_NAME"
-        echo "   用户名: $DB_USER"
-      else
-        echo "❌ .env 文件中的数据库配置不完整"
-        echo "🛑 更新终止"
-        return 1
-      fi
-    else
-      echo "❌ 未找到 .env 文件"
-      echo "🛑 更新终止"
-      return 1
-    fi
+  # 停止服务
+  if systemctl list-units --full -all 2>/dev/null | grep -Fq "panel.service"; then
+    echo "🛑 停止 panel 服务..."
+    $SUDO_CMD systemctl stop panel
   fi
 
-  # 检查必要的数据库配置
-  if [[ -z "$DB_PASSWORD" || -z "$DB_USER" || -z "$DB_NAME" ]]; then
-    echo "❌ 数据库配置不完整（缺少必要参数）"
-    echo "🛑 更新终止"
-    return 1
-  fi
+  # 替换文件
+  $SUDO_CMD mv "$TMP_BIN" "$INSTALL_DIR/panel"
+  $SUDO_CMD chmod +x "$INSTALL_DIR/panel"
+  $SUDO_CMD tar -xzf "$TMP_FRONT" -C "$STATIC_DIR"
+  rm -f "$TMP_FRONT"
+  echo "✅ 文件替换完成"
 
-  # 执行数据库字段变更
-  echo "🔄 执行数据库结构更新..."
-
-  # 创建临时迁移文件（现在有了数据库信息）
-  cat > temp_migration.sql <<EOF
--- 数据库结构更新
-USE \`$DB_NAME\`;
-
--- user 表：删除 name 字段（如果存在）
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'user'
-        AND column_name = 'name'
-    ),
-    'ALTER TABLE \`user\` DROP COLUMN \`name\`;',
-    'SELECT "Column \`name\` not exists in \`user\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- node 表：删除 port 字段、添加 server_ip 字段（如果不存在）
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'port'
-    ),
-    'ALTER TABLE \`node\` DROP COLUMN \`port\`;',
-    'SELECT "Column \`port\` not exists in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'server_ip'
-    ),
-    'ALTER TABLE \`node\` ADD COLUMN \`server_ip\` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;',
-    'SELECT "Column \`server_ip\` already exists in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 将 ip 赋值给 server_ip（如果字段都存在）
-UPDATE \`node\`
-SET \`server_ip\` = \`ip\`
-WHERE \`server_ip\` IS NULL;
-
--- node 表：修改 ip 字段类型为 longtext
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'ip'
-        AND data_type = 'varchar'
-    ),
-    'ALTER TABLE \`node\` MODIFY COLUMN \`ip\` LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;',
-    'SELECT "Column \`ip\` not exists or already modified in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- node 表：添加 version 字段（如果不存在）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'version'
-    ),
-    'ALTER TABLE \`node\` ADD COLUMN \`version\` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL;',
-    'SELECT "Column \`version\` already exists in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- node 表：添加 port_sta 字段（如果不存在）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'port_sta'
-    ),
-    'ALTER TABLE \`node\` ADD COLUMN \`port_sta\` INT(10) DEFAULT 1000 COMMENT "端口起始范围";',
-    'SELECT "Column \`port_sta\` already exists in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- node 表：添加 port_end 字段（如果不存在）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'port_end'
-    ),
-    'ALTER TABLE \`node\` ADD COLUMN \`port_end\` INT(10) DEFAULT 65535 COMMENT "端口结束范围";',
-    'SELECT "Column \`port_end\` already exists in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 为现有节点设置默认端口范围
-UPDATE \`node\`
-SET \`port_sta\` = 1000, \`port_end\` = 65535
-WHERE \`port_sta\` IS NULL OR \`port_end\` IS NULL;
-
--- node 表：添加 http、tls、socks 字段（如果不存在）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'http'
-    ),
-    'ALTER TABLE \`node\` ADD COLUMN \`http\` INT(10) DEFAULT 0 COMMENT "HTTP 服务端口";',
-    'SELECT "Column \`http\` already exists in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'tls'
-    ),
-    'ALTER TABLE \`node\` ADD COLUMN \`tls\` INT(10) DEFAULT 0 COMMENT "TLS 服务端口";',
-    'SELECT "Column \`tls\` already exists in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'node'
-        AND column_name = 'socks'
-    ),
-    'ALTER TABLE \`node\` ADD COLUMN \`socks\` INT(10) DEFAULT 0 COMMENT "SOCKS 服务端口";',
-    'SELECT "Column \`socks\` already exists in \`node\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 为现有节点设置 http、tls、socks 默认值
-UPDATE \`node\`
-SET \`http\` = IFNULL(\`http\`, 0),
-    \`tls\` = IFNULL(\`tls\`, 0),
-    \`socks\` = IFNULL(\`socks\`, 0);
-
--- tunnel 表：删除废弃字段（如果存在）
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'in_port_sta'
-    ),
-    'ALTER TABLE \`tunnel\` DROP COLUMN \`in_port_sta\`;',
-    'SELECT "Column \`in_port_sta\` not exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'in_port_end'
-    ),
-    'ALTER TABLE \`tunnel\` DROP COLUMN \`in_port_end\`;',
-    'SELECT "Column \`in_port_end\` not exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'out_ip_sta'
-    ),
-    'ALTER TABLE \`tunnel\` DROP COLUMN \`out_ip_sta\`;',
-    'SELECT "Column \`out_ip_sta\` not exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'out_ip_end'
-    ),
-    'ALTER TABLE \`tunnel\` DROP COLUMN \`out_ip_end\`;',
-    'SELECT "Column \`out_ip_end\` not exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- tunnel 表：添加 tcp_listen_addr、udp_listen_addr、protocol（如果不存在）
-
--- tcp_listen_addr
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'tcp_listen_addr'
-    ),
-    'ALTER TABLE \`tunnel\` ADD COLUMN \`tcp_listen_addr\` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT "0.0.0.0";',
-    'SELECT "Column \`tcp_listen_addr\` already exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- udp_listen_addr
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'udp_listen_addr'
-    ),
-    'ALTER TABLE \`tunnel\` ADD COLUMN \`udp_listen_addr\` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT "0.0.0.0";',
-    'SELECT "Column \`udp_listen_addr\` already exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- protocol
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'protocol'
-    ),
-    'ALTER TABLE \`tunnel\` ADD COLUMN \`protocol\` VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT "tls";',
-    'SELECT "Column \`protocol\` already exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- traffic_ratio (流量倍率)
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'traffic_ratio'
-    ),
-    'ALTER TABLE \`tunnel\` ADD COLUMN \`traffic_ratio\` DECIMAL(5,1) DEFAULT 1.0 COMMENT "流量倍率";',
-    'SELECT "Column \`traffic_ratio\` already exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 为现有数据设置默认流量倍率
-UPDATE \`tunnel\`
-SET \`traffic_ratio\` = 1.0
-WHERE \`traffic_ratio\` IS NULL;
-
--- forward 表：删除 proxy_protocol 字段（如果存在）
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'forward'
-        AND column_name = 'proxy_protocol'
-    ),
-    'ALTER TABLE \`forward\` DROP COLUMN \`proxy_protocol\`;',
-    'SELECT "Column \`proxy_protocol\` not exists in \`forward\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- forward 表：修改 remote_addr 字段类型为 longtext
-SET @sql = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'forward'
-        AND column_name = 'remote_addr'
-        AND data_type = 'varchar'
-    ),
-    'ALTER TABLE \`forward\` MODIFY COLUMN \`remote_addr\` LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL;',
-    'SELECT "Column \`remote_addr\` not exists or already modified in \`forward\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- forward 表：添加 strategy 字段（负载均衡策略）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'forward'
-        AND column_name = 'strategy'
-    ),
-    'ALTER TABLE \`forward\` ADD COLUMN \`strategy\` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT "fifo" COMMENT "负载均衡策略";',
-    'SELECT "Column \`strategy\` already exists in \`forward\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 为现有数据设置默认负载均衡策略
-UPDATE \`forward\`
-SET \`strategy\` = 'fifo'
-WHERE \`strategy\` IS NULL;
-
--- forward 表：添加 inx 字段（排序索引）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'forward'
-        AND column_name = 'inx'
-    ),
-    'ALTER TABLE \`forward\` ADD COLUMN \`inx\` INT(10) DEFAULT 0 COMMENT "排序索引";',
-    'SELECT "Column \`inx\` already exists in \`forward\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 为现有数据设置默认排序索引
-UPDATE \`forward\`
-SET \`inx\` = 0
-WHERE \`inx\` IS NULL;
-
--- tunnel 表：添加 interface_name 字段（如果不存在）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'tunnel'
-        AND column_name = 'interface_name'
-    ),
-    'ALTER TABLE \`tunnel\` ADD COLUMN \`interface_name\` VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL;',
-    'SELECT "Column \`interface_name\` already exists in \`tunnel\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- forward 表：添加 interface_name 字段（如果不存在）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'forward'
-        AND column_name = 'interface_name'
-    ),
-    'ALTER TABLE \`forward\` ADD COLUMN \`interface_name\` VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL;',
-    'SELECT "Column \`interface_name\` already exists in \`forward\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 创建 vite_config 表（如果不存在）
-CREATE TABLE IF NOT EXISTS \`vite_config\` (
-  \`id\` int(10) NOT NULL AUTO_INCREMENT,
-  \`name\` varchar(200) NOT NULL,
-  \`value\` varchar(200) NOT NULL,
-  \`time\` bigint(20) NOT NULL,
-  PRIMARY KEY (\`id\`),
-  UNIQUE KEY \`unique_name\` (\`name\`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- 创建 statistics_flow 表（如果不存在）
-CREATE TABLE IF NOT EXISTS \`statistics_flow\` (
-  \`id\` bigint(20) NOT NULL AUTO_INCREMENT,
-  \`user_id\` int(10) NOT NULL,
-  \`flow\` bigint(20) NOT NULL,
-  \`total_flow\` bigint(20) NOT NULL,
-  \`time\` varchar(100) NOT NULL,
-  \`created_time\` bigint(20) NOT NULL,
-  PRIMARY KEY (\`id\`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- statistics_flow 表：添加 created_time 字段（如果不存在）
-SET @sql = (
-  SELECT IF(
-    NOT EXISTS (
-      SELECT 1
-      FROM information_schema.COLUMNS
-      WHERE table_schema = DATABASE()
-        AND table_name = 'statistics_flow'
-        AND column_name = 'created_time'
-    ),
-    'ALTER TABLE \`statistics_flow\` ADD COLUMN \`created_time\` BIGINT(20) NOT NULL DEFAULT 0 COMMENT "创建时间毫秒时间戳";',
-    'SELECT "Column \`created_time\` already exists in \`statistics_flow\`";'
-  )
-);
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 为现有记录设置当前毫秒时间戳（仅当 created_time 为 0 或 NULL 时）
-UPDATE \`statistics_flow\`
-SET \`created_time\` = UNIX_TIMESTAMP() * 1000
-WHERE \`created_time\` = 0 OR \`created_time\` IS NULL;
-
-EOF
-
-  # 检查数据库容器
-  if ! docker ps --format "{{.Names}}" | grep -q "^gost-mysql$"; then
-    echo "❌ 数据库容器 gost-mysql 未运行"
-    echo "🔍 当前运行的容器："
-    docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-    echo "❌ 数据库结构更新失败，请手动执行 temp_migration.sql"
-    echo "📁 迁移文件已保存为 temp_migration.sql"
-    return 1
-  fi
-
-  # 执行数据库迁移
-  if docker exec -i gost-mysql mysql -u "$DB_USER" -p"$DB_PASSWORD" < temp_migration.sql 2>/dev/null; then
-    echo "✅ 数据库结构更新完成"
-  else
-    echo "⚠️ 使用用户密码失败，尝试root密码..."
-    if docker exec -i gost-mysql mysql -u root -p"$DB_PASSWORD" < temp_migration.sql 2>/dev/null; then
-      echo "✅ 数据库结构更新完成"
-    else
-      echo "❌ 数据库结构更新失败，请手动执行 temp_migration.sql"
-      echo "📁 迁移文件已保存为 temp_migration.sql"
-      echo "🔍 数据库容器状态: $(docker inspect -f '{{.State.Status}}' gost-mysql 2>/dev/null || echo '容器不存在')"
-      echo "🛑 更新终止"
-      return 1
-    fi
-  fi
-
-  # 清理临时文件
-  rm -f temp_migration.sql
-
-  echo "✅ 更新完成"
+  # 重启服务
+  $SUDO_CMD systemctl start panel
+  echo "✅ 更新完成，服务已重启。"
 }
 
-# 导出数据库备份
-export_migration_sql() {
-  echo "📄 开始导出数据库备份..."
-
-  # 获取数据库配置信息
-  echo "🔍 获取数据库配置信息..."
-
-  # 先检查后端容器是否在运行
-  if ! docker ps --format "{{.Names}}" | grep -q "^springboot-backend$"; then
-    echo "❌ 后端容器未运行，尝试从 .env 文件读取配置..."
-
-    # 从 .env 文件读取配置
-    if [[ -f ".env" ]]; then
-      DB_NAME=$(grep "^DB_NAME=" .env | cut -d'=' -f2 2>/dev/null)
-      DB_PASSWORD=$(grep "^DB_PASSWORD=" .env | cut -d'=' -f2 2>/dev/null)
-      DB_USER=$(grep "^DB_USER=" .env | cut -d'=' -f2 2>/dev/null)
-
-      if [[ -n "$DB_NAME" && -n "$DB_PASSWORD" && -n "$DB_USER" ]]; then
-        echo "✅ 从 .env 文件读取数据库配置成功"
-      else
-        echo "❌ .env 文件中的数据库配置不完整"
-        return 1
-      fi
-    else
-      echo "❌ 未找到 .env 文件"
-      return 1
-    fi
-  else
-    # 从容器环境变量获取数据库信息
-    DB_INFO=$(docker exec springboot-backend env | grep "^DB_" 2>/dev/null || echo "")
-
-    if [[ -n "$DB_INFO" ]]; then
-      DB_NAME=$(echo "$DB_INFO" | grep "^DB_NAME=" | cut -d'=' -f2)
-      DB_PASSWORD=$(echo "$DB_INFO" | grep "^DB_PASSWORD=" | cut -d'=' -f2)
-      DB_USER=$(echo "$DB_INFO" | grep "^DB_USER=" | cut -d'=' -f2)
-
-      echo "✅ 从容器环境变量读取数据库配置成功"
-    else
-      echo "❌ 无法从容器获取数据库配置，尝试从 .env 文件读取..."
-
-      if [[ -f ".env" ]]; then
-        DB_NAME=$(grep "^DB_NAME=" .env | cut -d'=' -f2 2>/dev/null)
-        DB_PASSWORD=$(grep "^DB_PASSWORD=" .env | cut -d'=' -f2 2>/dev/null)
-        DB_USER=$(grep "^DB_USER=" .env | cut -d'=' -f2 2>/dev/null)
-
-        if [[ -n "$DB_NAME" && -n "$DB_PASSWORD" && -n "$DB_USER" ]]; then
-          echo "✅ 从 .env 文件读取数据库配置成功"
-        else
-          echo "❌ .env 文件中的数据库配置不完整"
-          return 1
-        fi
-      else
-        echo "❌ 未找到 .env 文件"
-        return 1
-      fi
-    fi
-  fi
-
-  # 检查必要的数据库配置
-  if [[ -z "$DB_PASSWORD" || -z "$DB_USER" || -z "$DB_NAME" ]]; then
-    echo "❌ 数据库配置不完整（缺少必要参数）"
-    return 1
-  fi
-
-  echo "📋 数据库配置："
-  echo "   数据库名: $DB_NAME"
-  echo "   用户名: $DB_USER"
-
-  # 检查数据库容器是否运行
-  if ! docker ps --format "{{.Names}}" | grep -q "^gost-mysql$"; then
-    echo "❌ 数据库容器未运行，无法导出数据"
-    echo "🔍 当前运行的容器："
-    docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-    return 1
-  fi
-
-  # 生成数据库备份文件
-  SQL_FILE="database_backup_$(date +%Y%m%d_%H%M%S).sql"
-  echo "📝 导出数据库备份: $SQL_FILE"
-
-  # 使用 mysqldump 导出数据库
-  echo "⏳ 正在导出数据库..."
-  if docker exec gost-mysql mysqldump -u "$DB_USER" -p"$DB_PASSWORD" --single-transaction --routines --triggers "$DB_NAME" > "$SQL_FILE" 2>/dev/null; then
-    echo "✅ 数据库导出成功"
-  else
-    echo "⚠️ 使用用户密码失败，尝试root密码..."
-    if docker exec gost-mysql mysqldump -u root -p"$DB_PASSWORD" --single-transaction --routines --triggers "$DB_NAME" > "$SQL_FILE" 2>/dev/null; then
-      echo "✅ 数据库导出成功"
-    else
-      echo "❌ 数据库导出失败"
-      rm -f "$SQL_FILE"
-      return 1
-    fi
-  fi
-
-  # 检查文件大小
-  if [[ -f "$SQL_FILE" ]] && [[ -s "$SQL_FILE" ]]; then
-    FILE_SIZE=$(du -h "$SQL_FILE" | cut -f1)
-    echo "📁 文件位置: $(pwd)/$SQL_FILE"
-    echo "📊 文件大小: $FILE_SIZE"
-  else
-    echo "❌ 导出的文件为空或不存在"
-    rm -f "$SQL_FILE"
-    return 1
-  fi
-}
-
-
-# 卸载功能
+# ─── 卸载 ─────────────────────────────────────────────────────────────────────
 uninstall_panel() {
-  echo "🗑️ 开始卸载面板..."
-  check_docker
+  echo "🗑️ 开始卸载 Panel..."
 
-  if [[ ! -f "docker-compose.yml" ]]; then
-    echo "⚠️ 未找到 docker-compose.yml 文件，正在下载以完成卸载..."
-    DOCKER_COMPOSE_URL=$(get_docker_compose_url)
-    echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    curl -L -o docker-compose.yml "$DOCKER_COMPOSE_URL"
-    echo "✅ docker-compose.yml 下载完成"
-  fi
-
-  read -p "确认卸载面板吗？此操作将停止并删除所有容器和数据 (y/N): " confirm
+  read -p "确认卸载 Panel 吗？此操作将删除所有相关文件 (y/N): " confirm
   if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     echo "❌ 取消卸载"
     return 0
   fi
 
-  echo "🛑 停止并删除容器、镜像、卷..."
-  $DOCKER_CMD down --rmi all --volumes --remove-orphans
-  echo "🧹 删除配置文件..."
-  rm -f docker-compose.yml gost.sql .env
+  if systemctl list-units --full -all 2>/dev/null | grep -Fq "panel.service"; then
+    echo "🛑 停止并禁用服务..."
+    $SUDO_CMD systemctl stop panel 2>/dev/null || true
+    $SUDO_CMD systemctl disable panel 2>/dev/null || true
+  fi
+
+  [[ -f "$SERVICE_FILE" ]] && $SUDO_CMD rm -f "$SERVICE_FILE" && echo "🧹 删除服务文件"
+  $SUDO_CMD systemctl daemon-reload
+
+  if [[ -d "$INSTALL_DIR" ]]; then
+    $SUDO_CMD rm -rf "$INSTALL_DIR"
+    echo "🧹 删除安装目录: $INSTALL_DIR"
+  fi
+
   echo "✅ 卸载完成"
 }
 
-# 主逻辑
+# ─── 主逻辑 ───────────────────────────────────────────────────────────────────
 main() {
+  # 支持命令行参数直接调用
+  case "${1:-}" in
+    install)   install_panel; exit 0 ;;
+    update)    update_panel;  exit 0 ;;
+    uninstall) uninstall_panel; exit 0 ;;
+  esac
 
-  # 显示交互式菜单
   while true; do
     show_menu
-    read -p "请输入选项 (1-5): " choice
-
+    read -p "请输入选项 (1-4): " choice
     case $choice in
-      1)
-        install_panel
-        delete_self
-        exit 0
-        ;;
-      2)
-        update_panel
-        delete_self
-        exit 0
-        ;;
-      3)
-        uninstall_panel
-        delete_self
-        exit 0
-        ;;
-      4)
-        export_migration_sql
-        delete_self
-        exit 0
-        ;;
-      5)
-        echo "👋 退出脚本"
-        delete_self
-        exit 0
-        ;;
-      *)
-        echo "❌ 无效选项，请输入 1-5"
-        echo ""
-        ;;
+      1) install_panel;   exit 0 ;;
+      2) update_panel;    exit 0 ;;
+      3) uninstall_panel; exit 0 ;;
+      4) echo "👋 退出脚本"; exit 0 ;;
+      *) echo "❌ 无效选项，请输入 1-4"; echo "" ;;
     esac
   done
 }
 
-# 执行主函数
-main
+main "$@"
