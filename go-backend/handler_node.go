@@ -169,9 +169,9 @@ func HandleNodeInstall(c *gin.Context) {
 		return
 	}
 
-	// Get server_addr from config
+	// Get ip from config
 	var cfg ViteConfig
-	if err := DB.Where("name = ?", "server_addr").First(&cfg).Error; err != nil {
+	if err := DB.Where("name = ?", "ip").First(&cfg).Error; err != nil {
 		Rerr(c, "请先前往网站配置中设置ip")
 		return
 	}
